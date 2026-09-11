@@ -1,0 +1,10 @@
+{
+  "name": "youtube-side-comments",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Shows a YouTube video's comments in a resizable pane beside the player.",
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  }
+}

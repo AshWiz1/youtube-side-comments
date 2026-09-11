@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "YouTube Side Comments",
+  "version": "0.1.0",
+  "description": "Shows a video's comments in a pane beside the player, so you can watch and read at once.",
+  "content_scripts": [
+    {
+      "matches": ["https://www.youtube.com/watch*"],
+      "js": ["src/content.js"],
+      "css": ["src/layout.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["src/engine.js", "src/adapter.js"],
+      "matches": ["https://www.youtube.com/*"]
+    }
+  ]
+}

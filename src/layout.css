@@ -1,0 +1,33 @@
+/* One attribute on the root turns the whole layout on, so reverting to the
+   Native Layout is a single deletion rather than an unwinding. */
+:root {
+  --ysc-pane-width: 402px;
+}
+
+#ysc-pane {
+  width: 100%;
+}
+
+/* The rail takes our width rather than YouTube's, which it rewrites. */
+html[data-ysc='on'] #secondary {
+  width: var(--ysc-pane-width) !important;
+  flex: 0 0 var(--ysc-pane-width) !important;
+}
+
+/* YouTube floors the player column at a fixed width. Left alone, it would
+   silently cap the Splitter before it reached its ceiling. */
+html[data-ysc='on'] #primary,
+html[data-ysc='on'] #player-container-outer,
+html[data-ysc='on'] #player-container-inner,
+html[data-ysc='on'] ytd-player,
+html[data-ysc='on'] #movie_player {
+  min-width: 0 !important;
+}
+
+/* The Pane keeps its own scroll so reading the thread never moves the Player. */
+html[data-ysc='on'] #ysc-pane {
+  position: sticky;
+  top: var(--ytd-watch-flexy-masthead-height, 56px);
+  max-height: calc(100vh - var(--ytd-watch-flexy-masthead-height, 56px));
+  overflow-y: auto;
+}
