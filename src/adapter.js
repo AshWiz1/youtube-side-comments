@@ -13,6 +13,7 @@
 
 const ACTION_APPLY = 'apply';
 const PANE_ID = 'ysc-pane';
+const STRIP_ID = 'ysc-strip';
 
 /**
  * The Comments are found by the `#comments` id, never by tag name. The bare
@@ -21,6 +22,16 @@ const PANE_ID = 'ysc-pane';
  * day YouTube renames its element in an experiment. The id survives both.
  */
 const COMMENTS = '#comments';
+
+/**
+ * The Recommendation Strip's content, found by the `#related` id — normally a
+ * child of the right rail, alongside YouTube's panels, its playlist panel and
+ * the Comment Pane, though YouTube moves the same element into the column below
+ * the Player for its own layouts. Wherever it is, it is moved whole: the
+ * related list is a live YouTube renderer that keeps loading its own
+ * continuations, so it is never rebuilt, only relocated.
+ */
+const RELATED = '#related';
 
 /** YouTube's own mode flags, all carried by the watch root. */
 const THEATER = 'theater';
@@ -91,6 +102,10 @@ const PLAYER = '#player';
 export function createAdapter(doc, { splitter } = {}) {
   /** Where the Comments came from, so they can be put back exactly. */
   let home = null;
+  /** Where the related videos came from, for the same reason: the rail's order
+   *  is YouTube's, and anything other than the exact position is a change we
+   *  made to a page we then claimed to have left alone. */
+  let relatedHome = null;
   /** When the Comments region was first seen with nothing in it. */
   let blankSince = 0;
   /** The width currently on the Pane, so the Splitter can start a gesture from
@@ -242,6 +257,21 @@ export function createAdapter(doc, { splitter } = {}) {
     // goes immediately before the Pane it resizes.
     if (splitter) page.rail.insertBefore(splitter, pane);
     pane.append(comments);
+
+    // The Recommendation Strip moves as one element, contents and all, so the
+    // related list keeps its own items, its own scroll and its own lazy-loading
+    // sentinel. Re-read its home whenever it is not already ours, exactly as
+    // the Comments' is — reading it while it sat in the Strip would record the
+    // Strip as where it belongs.
+    const related = doc.querySelector(RELATED);
+    if (related) {
+      const strip = stripIn(page);
+      if (!strip.contains(related)) {
+        relatedHome = { parent: related.parentNode, next: related.nextSibling };
+        strip.append(related);
+      }
+    }
+
     doc.documentElement.dataset.ysc = 'on';
     delete doc.documentElement.dataset.yscReason;
     setPaneWidth(decision.paneWidth);
@@ -306,6 +336,15 @@ export function createAdapter(doc, { splitter } = {}) {
       const before = home.next?.parentNode === home.parent ? home.next : null;
       home.parent.insertBefore(comments, before);
     }
+    // Back to the node it came from, at the position it held there, which is
+    // what makes a page we stepped aside from identical to one we never
+    // arranged.
+    const related = doc.querySelector(RELATED);
+    if (relatedHome && related && relatedHome.parent.isConnected) {
+      const before = relatedHome.next?.parentNode === relatedHome.parent ? relatedHome.next : null;
+      relatedHome.parent.insertBefore(related, before);
+    }
+    doc.getElementById(STRIP_ID)?.remove();
     doc.getElementById(PANE_ID)?.remove();
     splitter?.remove();
     playerWatch?.disconnect();
@@ -319,6 +358,7 @@ export function createAdapter(doc, { splitter } = {}) {
     // its text selection until the next gesture finished.
     delete doc.documentElement.dataset.yscDrag;
     home = null;
+    relatedHome = null;
     resyncPlayer();
   }
 
@@ -351,6 +391,30 @@ export function createAdapter(doc, { splitter } = {}) {
 
 function has(element, attribute) {
   return element?.hasAttribute(attribute) ?? false;
+}
+
+/**
+ * The Recommendation Strip — our full-width container below the columns, which
+ * the related videos move into. Ours, and therefore disposable: the related
+ * videos are YouTube's and go back to the rail.
+ *
+ * It is placed **after** the box holding the Player's column and the rail, so
+ * it spans both rather than one of them, and inside the watch root, so it keeps
+ * YouTube's own page margins.
+ */
+function stripIn(page) {
+  let strip = page.primary.ownerDocument.getElementById(STRIP_ID);
+  if (!strip) {
+    strip = page.primary.ownerDocument.createElement('div');
+    strip.id = STRIP_ID;
+  }
+  const columns = page.primary.parentElement;
+  // `after` is a move, not a copy: re-running it on a Strip already in place
+  // would be a reflow of the whole page for no change.
+  if (strip.parentElement !== columns.parentElement || strip.previousElementSibling !== columns) {
+    columns.after(strip);
+  }
+  return strip;
 }
 
 function paneIn(rail) {

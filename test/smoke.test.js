@@ -50,20 +50,64 @@ const RECORD_NATIVE_LAYOUT = `
   window.__resizes = 0;
   window.__paneSeen = false;
   window.__native = null;
+  window.__nativeRelated = null;
+  window.__takenFrom = null;
+  window.__putBack = null;
   addEventListener('resize', () => { window.__resizes++; });
   const sig = (e) => e ? (e.tagName || '').toLowerCase() + (e.id ? '#' + e.id : '') : null;
   const chain = (e) => { const a = []; for (let n = e; n && n !== document.documentElement; n = n.parentElement) a.push(sig(n)); return a; };
-  const grab = (records) => {
-    if (records.some((r) => [...r.addedNodes].some((n) => n.id === 'ysc-pane'))) window.__paneSeen = true;
-    const c = document.querySelector('#comments');
-    if (c && !window.__native) {
-      window.__native = { parent: c.parentElement, chain: chain(c.parentElement),
-        prev: sig(c.previousElementSibling), next: sig(c.nextElementSibling) };
+  const home = (e) => ({ parent: e.parentElement, chain: chain(e.parentElement),
+    order: [...(e.parentElement?.children || [])].map(sig) });
+  // Where the related list was taken from and where it was put back, both read
+  // from the move itself. YouTube rearranges the page around us — it empties
+  // the rail when the document goes fullscreen, related list and all — so a
+  // position sampled even a moment either side of the move can be a fact about
+  // YouTube's next layout rather than about where we put anything. The two
+  // readings are of the same instant as the move, so they are comparable.
+  const moved = (records) => {
+    const has = (list) => [...list].some((n) => n.id === 'related');
+    const intoStrip = records.some((r) => r.target.id === 'ysc-strip' && has(r.addedNodes));
+    const outOfStrip = records.some((r) => r.target.id === 'ysc-strip' && has(r.removedNodes));
+    for (const rec of records) {
+      // Only the moves the Strip is party to are ours; YouTube moves the same
+      // list about on its own account, and those moves are its business.
+      if (rec.target.id === 'ysc-strip') continue;
+      if (intoStrip && has(rec.removedNodes)) window.__takenFrom = { chain: chain(rec.target).join('<') };
+      if (outOfStrip && has(rec.addedNodes)) window.__putBack = { chain: chain(rec.target).join('<') };
     }
+  };
+  const grab = (records) => {
+    moved(records);
+    if (records.some((r) => [...r.addedNodes].some((n) => n.id === 'ysc-pane'))) window.__paneSeen = true;
+    // Recorded before the extension runs, never after: a home read once we have
+    // moved something would record our own container as where it belongs.
+    if (window.__paneSeen) return;
+    const c = document.querySelector('#comments');
+    if (c && !window.__native) window.__native = home(c);
+    // The related list is *re-read* rather than latched on first sight. YouTube
+    // builds its watch page in stages and replaces the rail's contents as the
+    // response arrives, so first sight is a skeleton's position, not the one a
+    // revert has to hit. The last read before we run is the one that is true.
+    const r = document.querySelector('#related');
+    if (r) window.__nativeRelated = home(r);
   };
   new MutationObserver(grab).observe(document, { childList: true, subtree: true });
   grab([]);
 `;
+
+/**
+ * The related videos, whichever of YouTube's item elements is in circulation:
+ * the lockup view model it ships now, or the compact renderer it shipped
+ * before. Matching a tag YouTube has already replaced would quietly assert
+ * nothing, so the set is deliberately broad.
+ */
+const CARD = 'ytd-compact-video-renderer, yt-lockup-view-model, ytd-compact-radio-renderer, ytd-compact-playlist-renderer';
+
+/** A viewport clearly narrower than the default window and clearly wider than
+ *  YouTube's own single-column breakpoint, so the Strip is measured re-laid out
+ *  rather than measured collapsed. */
+const NARROW_VIEWPORT = 1280;
+const NARROW_STRIP = NARROW_VIEWPORT + 20;
 
 /** Forces theater mode onto the watch root as the document is built, which is
  *  how theater mode actually reaches a page: persisted, not toggled. */
@@ -124,34 +168,80 @@ describe('Comment Pane on a real Watch Page', { skip: SKIP }, () => {
     );
     const r = await page.eval(`(() => { ${PRELUDE}
       const comments = document.querySelector('#comments');
+      const related = document.querySelector('#related');
+      const cards = [...document.querySelectorAll('#secondary-inner #related ${CARD}')];
+      const lefts = new Set(cards.map((c) => Math.round(c.getBoundingClientRect().left)));
+      const orderOf = (e) => [...(e?.parentElement?.children ?? [])].map(sig);
+      const common = (a, b) => a.filter((s) => b.includes(s)).join('>');
       return {
         reason: document.documentElement.dataset.yscReason ?? null,
         applied: document.documentElement.dataset.ysc ?? null,
         inline: document.documentElement.style.getPropertyValue('--ysc-pane-width'),
         pane: !!document.getElementById('ysc-pane'),
+        strip: !!document.getElementById('ysc-strip'),
         residue: [...document.querySelectorAll('body *')]
           .filter((e) => (e.id || '').includes('ysc') || [...e.attributes].some((a) => a.name.includes('ysc'))).length,
         sameParent: comments?.parentElement === window.__native?.parent,
         chain: chain(comments?.parentElement).join('<'),
         nativeChain: (window.__native?.chain || []).join('<'),
-        prev: sig(comments?.previousElementSibling),
-        next: sig(comments?.nextElementSibling),
-        nativePrev: window.__native?.prev,
-        nativeNext: window.__native?.next,
+        // Position as *relative order*, for the reason the related videos'
+        // is: YouTube rearranges the page under us while we are arranged —
+        // it moved the related list into the Comments' own container during a
+        // run, which no immediate-neighbour comparison survives, and which is
+        // its business, not ours. The order of the elements that are in both
+        // readings is ours, and any misplacement by us changes it.
+        orderNow: common(orderOf(comments), window.__native?.order ?? []),
+        orderThen: common(window.__native?.order ?? [], orderOf(comments)),
         inRail: !!document.querySelector('#secondary-inner #comments'),
+        relatedAlive: !!related && !document.getElementById('ysc-strip')?.contains(related),
+        // The exact parent, in the one form YouTube's own churn cannot spoil:
+        // read from the move itself, once when the list is taken and once when
+        // it is put back, so the two are comparable however the page moved in
+        // between. A chain rather than the element, because the elements that
+        // hold it are exactly what YouTube relocates.
+        takenFrom: window.__takenFrom?.chain ?? null,
+        putBack: window.__putBack?.chain ?? null,
+        // Position asserted as *relative order* rather than as immediate
+        // neighbours. The rail's ad slots come and go — #donation-shelf was
+        // measured vanishing between the recording and the revert — and a
+        // neighbour YouTube itself deleted is not a fact about where we put
+        // anything. The order of the elements that are there in both readings
+        // is, and it is invariant under YouTube adding or removing its own.
+        relatedOrderNow: common(orderOf(related), window.__nativeRelated?.order ?? []),
+        relatedOrderThen: common(window.__nativeRelated?.order ?? [], orderOf(related)),
+        // Back to the rail's own single column, not just back in the rail: the
+        // grid was ours, so leaving it behind would be residue of the layout.
+        relatedColumns: lefts.size,
+        // Carried only so a failure says why: where the list sits now, and how
+        // many copies of it YouTube has in the page at all.
+        relatedCopies: document.querySelectorAll('#related').length,
+        relatedParent: sig(related?.parentElement),
       };
     })()`);
+    const why = ` (${JSON.stringify({
+      relatedParent: r.relatedParent, copies: r.relatedCopies,
+      chain: r.chain, nativeChain: r.nativeChain,
+      now: r.relatedOrderNow, then: r.relatedOrderThen,
+    })})`;
 
     assert.equal(r.reason, reason, 'the Step Aside reason was not recorded');
     assert.equal(r.applied, null, 'the root still carries the layout attribute');
     assert.equal(r.inline, '', 'an inline pane width was left on the root');
     assert.equal(r.pane, false, 'the Comment Pane was left behind');
+    assert.equal(r.strip, false, 'the Recommendation Strip was left behind');
     assert.equal(r.residue, 0, 'the extension left its own attributes on the page');
     assert.equal(r.sameParent, true, 'the Comments are not back at their exact original parent');
     assert.equal(r.chain, r.nativeChain, 'the Comments are back at the wrong nesting depth');
-    assert.equal(r.prev, r.nativePrev, 'the Comments moved relative to the element before them');
-    assert.equal(r.next, r.nativeNext, 'the Comments moved relative to the element after them');
+    assert.equal(r.orderNow, r.orderThen, 'the Comments moved within their original parent');
     assert.equal(r.inRail, false, 'the Comments are still in the right rail');
+    assert.equal(r.relatedAlive, true, `the related videos were destroyed or left in our container${why}`);
+    assert.equal(r.putBack, r.takenFrom, `the related videos were not put back exactly where they were taken from${why}`);
+    assert.equal(r.relatedOrderNow, r.relatedOrderThen, `the related videos moved within their parent${why}`);
+    // Nothing of the Strip's grid survives; the rail's own list is one column.
+    // Zero cards is the one layout where YouTube keeps the related videos
+    // somewhere else entirely — theater mode puts them below the Player — and
+    // there is no grid there to be rid of.
+    assert.ok(r.relatedColumns <= 1, `the related videos kept the Recommendation Strip’s grid instead of a native column${why}`);
   };
 
   /** Put a forced page fact back and let the extension re-decide, so that the
@@ -309,9 +399,122 @@ describe('Comment Pane on a real Watch Page', { skip: SKIP }, () => {
     assert.ok(r.metaWidth > 0, 'the video metadata has no box');
     assert.ok(r.title.length > 0, 'the video title is missing');
     assert.ok(r.channel && r.actions && r.description, 'the channel row, actions or description is missing');
-    for (const id of ['related', 'panels', 'playlist', 'chat-container']) {
+    // The related videos are the one occupant that leaves the rail — that is
+    // the Recommendation Strip, and it is deliberate. Everything else YouTube
+    // put in that column stays in it.
+    for (const id of ['panels', 'playlist', 'chat-container']) {
       assert.ok(r.rail.includes(id), `${id} was displaced from the rail: ${r.rail.join(', ')}`);
     }
+    assert.ok(!r.rail.includes('related'), `the related videos are still in the rail: ${r.rail.join(', ')}`);
+  });
+
+  // ------------------------------------------------------- Recommendation Strip
+
+  /** Every number the Strip's claims are made of, read fresh from the page. */
+  const stripGeometry = () => page.eval(`(() => { ${PRELUDE}
+    const box = (e) => { if (!e) return null; const b = e.getBoundingClientRect();
+      return { left: +b.left.toFixed(1), right: +b.right.toFixed(1), top: +b.top.toFixed(1),
+               bottom: +b.bottom.toFixed(1), width: +b.width.toFixed(1), height: +b.height.toFixed(1) }; };
+    const strip = document.getElementById('ysc-strip');
+    const cards = [...(strip?.querySelectorAll('${CARD}') || [])];
+    return {
+      strip: box(strip),
+      player: box(document.querySelector('#player')),
+      pane: box(document.querySelector('#ysc-pane')),
+      rail: box(document.querySelector('#secondary-inner')),
+      belowColumns: strip ? strip.getBoundingClientRect().top >= document.querySelector('#primary').getBoundingClientRect().bottom - 1 : false,
+      cards: cards.length,
+      card: box(cards[0]),
+      // One distinct left edge per column of the grid — and exactly one if the
+      // list is still the rail's single, stretched column.
+      columns: new Set(cards.map((c) => Math.round(c.getBoundingClientRect().left))).size,
+      text: (cards[0]?.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 80),
+      overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      // Only so an overflow failure names the element rather than the number.
+      widest: [...document.querySelectorAll('body *')]
+        .map((e) => ({ e, r: e.getBoundingClientRect() }))
+        .filter(({ r }) => r.width > 0 && r.right > document.documentElement.clientWidth + 0.5)
+        .sort((a, b) => b.r.right - a.r.right).slice(0, 3)
+        .map(({ e, r }) => sig(e) + ' ' + Math.round(r.left) + '-' + Math.round(r.right) + ' in ' + sig(e.parentElement)),
+    };
+  })()`);
+
+  test('the Recommendation Strip is below the Player and the Pane, not beside them', async () => {
+    const r = await stripGeometry();
+    assert.ok(r.strip && r.player && r.pane, 'the Strip, the Player or the Comment Pane is missing');
+    assert.equal(
+      await page.eval(`!!document.querySelector('#secondary-inner #related')`),
+      false,
+      'the related videos are still in the right rail',
+    );
+    assert.ok(
+      r.strip.top >= r.player.bottom - 1,
+      `the Strip starts at ${r.strip.top}, inside the Player which ends at ${r.player.bottom}`,
+    );
+    assert.ok(
+      r.strip.top >= r.pane.bottom - 1,
+      `the Strip starts at ${r.strip.top}, inside the Comment Pane which ends at ${r.pane.bottom}`,
+    );
+    assert.ok(
+      r.strip.width >= r.player.width + r.pane.width,
+      `the Strip is ${r.strip.width}px wide, narrower than the ${(r.player.width + r.pane.width).toFixed(0)}px the Player and the Pane span`,
+    );
+    assert.equal(r.belowColumns, true, 'the Strip is not below the box the Player and the Pane share');
+
+    // No dead column. The region the Strip vacated is the Comment Pane's, and
+    // the width it published is covered by the Strip below the columns.
+    assert.ok(
+      Math.abs(r.pane.width - r.rail.width) <= 2,
+      `the Comment Pane is ${r.pane.width}px wide in a ${r.rail.width}px rail, leaving a gap`,
+    );
+    assert.ok(
+      r.strip.left <= r.rail.left + 1 && r.strip.right >= r.rail.right - 1,
+      `the Strip spans ${r.strip.left}–${r.strip.right}, not the rail's ${r.rail.left}–${r.rail.right}`,
+    );
+  });
+
+  test('the related videos loaded in the Strip, laid out for the width they now have', async () => {
+    const r = await stripGeometry();
+    assert.ok(r.cards > 5, `only ${r.cards} related videos rendered in the Strip`);
+    assert.ok(r.text.length > 10, `the first related video has no content: ${JSON.stringify(r.text)}`);
+    assert.ok(
+      r.columns >= 3,
+      `the related videos sit in ${r.columns} column(s) — the Strip reads as one stretched column, not a grid`,
+    );
+    assert.ok(
+      r.card.width < r.strip.width / 2,
+      `a related video is ${r.card.width}px wide inside a ${r.strip.width}px Strip`,
+    );
+    assert.equal(r.overflow, 0, `the page scrolls sideways by ${r.overflow}px: ${JSON.stringify(r.widest)}`);
+  });
+
+  test('the Strip keeps its grid at a narrower viewport, and gives the rail back its column', async () => {
+    await page.send('Emulation.setDeviceMetricsOverride', {
+      width: NARROW_VIEWPORT, height: 900, deviceScaleFactor: 1, mobile: false,
+    });
+    // Waited for the Strip's own box, not the layout attribute: the attribute is
+    // already on, and the page has not re-laid itself out until the box moves.
+    await page.waitFor(`document.documentElement.dataset.ysc === 'on'`, 'the layout at 1280px', 15_000);
+    await page.waitFor(
+      `(() => { const s = document.getElementById('ysc-strip'); return !!s && s.getBoundingClientRect().width < ${NARROW_STRIP}; })()`,
+      `the Strip to take the narrower viewport`,
+      15_000,
+    );
+    const narrow = await stripGeometry();
+    assert.ok(narrow.strip && narrow.strip.width < NARROW_STRIP, `no Strip at a narrow viewport: ${JSON.stringify(narrow.strip)}`);
+    assert.ok(
+      narrow.columns >= 2,
+      `the Strip fell back to ${narrow.columns} column(s) at 1280px, which is the layout the Strip exists to avoid`,
+    );
+    assert.equal(narrow.overflow, 0, `the page scrolls sideways by ${narrow.overflow}px at 1280: ${JSON.stringify(narrow.widest)}`);
+
+    await page.send('Emulation.clearDeviceMetricsOverride');
+    await page.waitFor(`document.documentElement.dataset.ysc === 'on'`, 'the layout to come back', 15_000);
+    await page.waitFor(
+      `(() => { const s = document.getElementById('ysc-strip'); return !!s && s.getBoundingClientRect().width > 1600; })()`,
+      'the Strip to take the wide viewport back',
+      15_000,
+    );
   });
 
   test('theater mode Steps Aside and restores the Native Layout exactly', async () => {

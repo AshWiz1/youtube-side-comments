@@ -57,6 +57,47 @@ html[data-ysc='on'] #ysc-splitter:focus-visible {
   outline: none;
 }
 
+/* The Recommendation Strip: the related videos, out of the rail and full width
+   below the Player and the Comment Pane. It is placed after the columns, so its
+   width is theirs together rather than either one's. */
+html[data-ysc='on'] #ysc-strip {
+  box-sizing: border-box;
+  width: 100%;
+  /* YouTube's own page gutter, so the grid lines up with the Player rather than
+     running to the window edge — and so the hover overlay every card carries,
+     which is a few pixels wider than the card itself, has somewhere to go
+     instead of pushing the page sideways. */
+  padding-inline: 16px;
+  margin-top: 24px;
+}
+
+/* YouTube measures the list and its wrapper against the rail they were born in.
+   Left alone at page width they render one very wide column of cards — the
+   stretched look the Strip exists to avoid — so both levels are released back
+   to the width they actually have. */
+html[data-ysc='on'] #ysc-strip #items,
+html[data-ysc='on'] #ysc-strip ytd-item-section-renderer {
+  width: auto !important;
+  max-width: none !important;
+}
+
+/* The level that directly holds the cards becomes the grid. YouTube currently
+   wraps them in an item section's `#contents`; a bare `#items` is the older
+   shape. Whichever is in circulation, the columns belong on the level that
+   holds the items, not on the level that holds the list. */
+html[data-ysc='on'] #ysc-strip ytd-item-section-renderer > #contents,
+html[data-ysc='on'] #ysc-strip #items:not(:has(> ytd-item-section-renderer)) {
+  display: grid !important;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 16px;
+}
+
+/* Loading the next page of related videos is the list's footer, not a card, so
+   it spans the row instead of sitting in a column of its own. */
+html[data-ysc='on'] #ysc-strip ytd-continuation-item-renderer {
+  grid-column: 1 / -1;
+}
+
 /* A drag in flight owns the whole page: no text may be selected by it, and the
    cursor stays a resize cursor over every element it crosses. */
 html[data-ysc-drag] {

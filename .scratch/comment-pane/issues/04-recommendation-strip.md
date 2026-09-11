@@ -6,9 +6,9 @@
 
 **Status:** ready-for-agent
 
-- [ ] Related videos no longer occupy the right rail and appear below the Player and the Comment Pane.
-- [ ] The Recommendation Strip spans the full width and is laid out for that width, rather than reading as a single very wide stretched column of thumbnails.
-- [ ] No dead column is left behind where the rail used to be.
-- [ ] The Recommendation Strip reverts to its original position and appearance through the Step Aside path, with no residue.
-- [ ] Elements in the rail other than related videos are not displaced by the move.
-- [ ] The Strip's layout holds at both narrow and wide viewports.
+- [x] Related videos no longer occupy the right rail and appear below the Player and the Comment Pane.
+- [x] The Recommendation Strip spans the full width and is laid out for that width, rather than reading as a single very wide stretched column of thumbnails.
+- [x] No dead column is left behind where the rail used to be.
+- [x] The Recommendation Strip reverts to its original position and appearance through the Step Aside path, with no residue.
+- [x] Elements in the rail other than related videos are not displaced by the move.
+- [x] The Strip's layout holds at both narrow and wide viewports.

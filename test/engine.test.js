@@ -55,10 +55,25 @@ for (const [name, s, paneWidth] of applies) {
     assert.deepEqual(decide(state(s)), {
       action: ACTION.APPLY,
       paneWidth,
-      placement: { comments: PLACE.PANE, related: PLACE.NATIVE },
+      // The Comments beside the Player and the Recommendation Strip below the
+      // two of them, on every page we apply to.
+      placement: { comments: PLACE.PANE, related: PLACE.STRIP },
     });
   });
 }
+
+// A Step Aside moves nothing, so it promises nothing: a placement belongs to an
+// apply alone, and every trigger is held to that.
+test('a Step Aside carries no placement', () => {
+  for (const [name, s] of triggers) {
+    assert.equal(decide(state(s)).placement, undefined, name);
+  }
+});
+
+// The Adapter obeys these strings, so renaming one moves the wrong thing.
+test('place identifiers are stable', () => {
+  assert.deepEqual(PLACE, { PANE: 'pane', STRIP: 'strip', NATIVE: 'native' });
+});
 
 // The spec's rule for overlaps: the reason reported is the first trigger that
 // matches, and the order is the engine's to choose — so pin it down.

@@ -38,6 +38,7 @@ export const REASON = {
 /** Where each relocated region belongs. */
 export const PLACE = {
   PANE: 'pane',
+  STRIP: 'strip',
   NATIVE: 'native',
 };
 
@@ -126,7 +127,11 @@ export function decide({ viewport, page, prefs }) {
   return {
     action: ACTION.APPLY,
     paneWidth: resolvePaneWidth(prefs.paneWidth, viewport.container ?? viewport.width),
-    placement: { comments: PLACE.PANE, related: PLACE.NATIVE },
+    // The Comments go beside the Player and the Recommendation Strip goes below
+    // the two of them, whichever they are: the placement is a fact about the
+    // layout, so no page state — width, columns, rail occupancy — can move one
+    // without the other.
+    placement: { comments: PLACE.PANE, related: PLACE.STRIP },
   };
 }
 
