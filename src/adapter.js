@@ -79,11 +79,27 @@ const LIVE_CHAT = '#chat-container ytd-live-chat-frame';
 const MODE_FLAGS = [THEATER, TWO_COLUMNS, SINGLE_COLUMN, ...DOCKING_PANEL_MODES];
 const WATCH_ROOT = MODE_FLAGS.map((flag) => `[${flag}]`).join(',');
 
-export function createAdapter(doc) {
+/** The Player's frame — the box the Comment Pane shares its height with. */
+const PLAYER = '#player';
+
+/**
+ * @param {Document} doc
+ * @param {{splitter?: HTMLElement}} [deps]  The Splitter's element, which this
+ *   Adapter places in the rail and takes back out, because it owns what goes
+ *   into the page. Its behaviour belongs to the Splitter module.
+ */
+export function createAdapter(doc, { splitter } = {}) {
   /** Where the Comments came from, so they can be put back exactly. */
   let home = null;
   /** When the Comments region was first seen with nothing in it. */
   let blankSince = 0;
+  /** The width currently on the Pane, so the Splitter can start a gesture from
+   *  what is actually on screen rather than from what it last asked for. */
+  let appliedWidth = 0;
+  /** The Player's box, watched so the Pane can follow its height. */
+  let playerWatch = null;
+  /** One Player resync per frame, however many widths a drag passes through. */
+  let resyncQueued = false;
 
   /**
    * Locate the Watch Page by structure and identifiers rather than by
@@ -146,6 +162,17 @@ export function createAdapter(doc) {
     return Date.now() - blankSince >= COMMENTS_SETTLE_MS;
   }
 
+  /**
+   * The box the Player and the Comment Pane share, which the width ceiling is a
+   * fraction of. It has to be the columns' container and not the rail — the rail
+   * *is* the Pane, so clamping against it would be circular. A page that cannot
+   * say where the columns live falls back to the viewport, which is what this
+   * box equals on every Watch Page measured.
+   */
+  function containerWidth(page = locate()) {
+    return page?.primary.parentElement?.clientWidth || doc.documentElement.clientWidth;
+  }
+
   function readState(prefs) {
     const page = locate();
     const root = watchRoot(page);
@@ -153,7 +180,7 @@ export function createAdapter(doc) {
     // region itself, whatever YouTube has decided to put in it.
     const comments = doc.querySelector(COMMENTS);
     return {
-      viewport: { width: doc.documentElement.clientWidth },
+      viewport: { width: doc.documentElement.clientWidth, container: containerWidth(page) },
       page: {
         isWatchPage: doc.location.pathname === '/watch',
         isShorts: doc.location.pathname.startsWith('/shorts'),
@@ -210,11 +237,58 @@ export function createAdapter(doc) {
       home = { parent: comments.parentNode, next: comments.nextSibling };
     }
 
-    paneIn(page.rail).append(comments);
-    doc.documentElement.style.setProperty('--ysc-pane-width', `${decision.paneWidth}px`);
+    const pane = paneIn(page.rail);
+    // The Splitter straddles the boundary between the Player and the Pane, so it
+    // goes immediately before the Pane it resizes.
+    if (splitter) page.rail.insertBefore(splitter, pane);
+    pane.append(comments);
     doc.documentElement.dataset.ysc = 'on';
     delete doc.documentElement.dataset.yscReason;
+    setPaneWidth(decision.paneWidth);
+    followPlayerHeight();
+    // Immediate rather than debounced: this is the one width change nobody is
+    // dragging through, and a page that has just been arranged is the one moment
+    // the Player has certainly not been resynced by YouTube itself.
     resyncPlayer();
+  }
+
+  /**
+   * A width change that did not come from a fresh decision — the Splitter's
+   * drag, applied live so the Pane follows the pointer.
+   */
+  function setPaneWidth(width) {
+    appliedWidth = width;
+    // Stepped aside there is no Pane to widen, and leaving the property behind
+    // would be a residue of a layout we are not running.
+    if (doc.documentElement.dataset.ysc !== 'on') return;
+    doc.documentElement.style.setProperty('--ysc-pane-width', `${width}px`);
+    // Debounced to a frame: a drag passes through dozens of widths, and YouTube
+    // answering each one with a full Player relayout is what makes a drag stutter.
+    if (resyncQueued) return;
+    resyncQueued = true;
+    doc.defaultView.requestAnimationFrame(() => {
+      resyncQueued = false;
+      resyncPlayer();
+    });
+  }
+
+  /**
+   * The Comment Pane shares the Player's height rather than the rail's, which
+   * runs ~120px taller — the rail's own height leaves the Pane longer than the
+   * video it sits beside. The Player's height follows its width, so watching its
+   * box also re-measures after every width change without anyone having to
+   * remember to.
+   */
+  function followPlayerHeight() {
+    const player = doc.querySelector(PLAYER);
+    if (!player || !doc.defaultView.ResizeObserver) return;
+    playerWatch ??= new doc.defaultView.ResizeObserver(() => {
+      // Re-read rather than close over: YouTube replaces its watch-page roots
+      // between videos, and a remembered element would be a detached one.
+      const box = doc.querySelector(PLAYER)?.getBoundingClientRect();
+      if (box) doc.documentElement.style.setProperty('--ysc-pane-height', `${box.height}px`);
+    });
+    playerWatch.observe(player);
   }
 
   /**
@@ -233,9 +307,17 @@ export function createAdapter(doc) {
       home.parent.insertBefore(comments, before);
     }
     doc.getElementById(PANE_ID)?.remove();
+    splitter?.remove();
+    playerWatch?.disconnect();
+    playerWatch = null;
     doc.documentElement.style.removeProperty('--ysc-pane-width');
+    doc.documentElement.style.removeProperty('--ysc-pane-height');
     delete doc.documentElement.dataset.ysc;
     delete doc.documentElement.dataset.yscReason;
+    // A drag in flight when the layout went away has ended, whatever the pointer
+    // is still doing: leaving this on the root would lock the page's cursor and
+    // its text selection until the next gesture finished.
+    delete doc.documentElement.dataset.yscDrag;
     home = null;
     resyncPlayer();
   }
@@ -255,7 +337,16 @@ export function createAdapter(doc) {
     doc.defaultView.dispatchEvent(event);
   }
 
-  return { readState, apply, revert, observeModes };
+  return {
+    readState,
+    apply,
+    revert,
+    observeModes,
+    setPaneWidth,
+    /** The width the Pane is actually at, which is what a gesture starts from. */
+    paneWidth: () => appliedWidth,
+    containerWidth,
+  };
 }
 
 function has(element, attribute) {

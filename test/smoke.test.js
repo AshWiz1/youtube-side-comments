@@ -20,9 +20,13 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { launch, newPage, sleep } from '../test-support/cdp.mjs';
+import { KEYBOARD_STEP } from '../src/splitter.js';
 
 const EXTENSION = join(dirname(fileURLToPath(import.meta.url)), '..');
 const WATCH_URL = process.env.YSC_SMOKE_URL || 'https://www.youtube.com/watch?v=dQw4w9WgXcQ';
+/** A second Watch Page, long enough not to end under the run, for checking that
+ *  the width is a preference rather than a fact about one video. */
+const OTHER_URL = process.env.YSC_SMOKE_URL_2 || 'https://www.youtube.com/watch?v=aqz-KE-bpKQ';
 
 /** Shared in-page helpers. `onScreen` is the only real visibility test: a
  *  non-zero box can still be scrolled out of a clipping ancestor. */
@@ -218,11 +222,19 @@ describe('Comment Pane on a real Watch Page', { skip: SKIP }, () => {
   test('the Player keeps the left column and never overlaps the Comment Pane', async () => {
     const r = await page.eval(`(() => {
       const box = (s) => { const e = document.querySelector(s); if (!e) return null;
-        const { left, right, top, width } = e.getBoundingClientRect(); return { left, right, top, width }; };
+        const { left, right, top, width, height } = e.getBoundingClientRect();
+        return { left, right, top, width, height }; };
       return { player: box('#player'), pane: box('#ysc-pane') };
     })()`);
 
     assert.ok(r.pane && r.player, 'the Player or the Comment Pane is missing');
+    // The Pane shares the Player's height, not the rail's: the rail runs ~120px
+    // taller than the video, which would leave the Pane longer than the Player
+    // it sits beside.
+    assert.ok(
+      Math.abs(r.pane.height - r.player.height) <= 2,
+      `the Comment Pane is ${r.pane.height}px tall beside a ${r.player.height}px Player`,
+    );
     assert.ok(
       r.pane.left >= r.player.right,
       `the Comment Pane overlaps the Player by ${(r.player.right - r.pane.left).toFixed(1)}px`,
@@ -383,6 +395,303 @@ describe('Comment Pane on a real Watch Page', { skip: SKIP }, () => {
 
     await page.eval(`document.exitFullscreen()`, { awaitPromise: true });
     await page.waitFor(`document.documentElement.dataset.ysc === 'on'`, 'the layout to come back', 15_000);
+  });
+
+  // ---------------------------------------------------------------- Splitter
+
+  /** Every number a width change moves, read fresh from the page. */
+  const splitterGeometry = () => page.eval(`(() => {
+    const box = (e) => { if (!e) return null; const b = e.getBoundingClientRect();
+      return { left: +b.left.toFixed(1), right: +b.right.toFixed(1), top: +b.top.toFixed(1), width: +b.width.toFixed(1), height: +b.height.toFixed(1) }; };
+    const frame = document.querySelector('#movie_player');
+    const video = frame?.querySelector('video');
+    return {
+      pane: box(document.querySelector('#ysc-pane')),
+      frame: box(frame),
+      video: box(video),
+      // YouTube writes the Player's internal sizes as inline pixels, so this is
+      // the number that goes stale when nothing tells it the width changed.
+      inline: video ? parseFloat(video.style.width) : null,
+      // The control bar is sized the same way, and goes stale the same way.
+      bar: box(document.querySelector('#movie_player .ytp-chrome-bottom')),
+      splitter: box(document.querySelector('#ysc-splitter')),
+      // The box the ceiling is a fraction of, measured the way the Adapter does.
+      container: document.querySelector('#primary').parentElement.clientWidth,
+      applied: parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--ysc-pane-width')),
+    };
+  })()`);
+
+  /**
+   * A **real** drag, through CDP's pointer input rather than synthesized DOM
+   * events, so capture, the document-level fallbacks, the drag lock and the
+   * animation-frame debounce are all exercised the way a hand exercises them.
+   * `delta` is how far the pointer travels left, which is how much wider the
+   * Pane is asked to become.
+   */
+  const dragSplitter = async (delta, { steps = 8, during } = {}) => {
+    const g = await splitterGeometry();
+    const y = Math.round(g.pane.top + 80);
+    const x = Math.round(g.splitter.left + g.splitter.width / 2);
+    const at = (i) => Math.round(x - (delta * i) / steps);
+    await page.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', buttons: 1, clickCount: 1 });
+    for (let i = 1; i <= steps; i++) {
+      await page.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: at(i), y, button: 'left', buttons: 1 });
+      if (during && i === Math.ceil(steps / 2)) await during({ x: at(i), y });
+    }
+    await page.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: at(steps), y, button: 'left', buttons: 0, clickCount: 1 });
+    return g;
+  };
+
+  /** A real click, so the Splitter takes focus the way it would for a reader. */
+  const clickSplitter = async (clickCount) => {
+    const g = await splitterGeometry();
+    const x = Math.round(g.splitter.left + g.splitter.width / 2);
+    const y = Math.round(g.pane.top + 80);
+    for (let i = 1; i <= clickCount; i++) {
+      await page.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', buttons: 1, clickCount: i });
+      await page.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', buttons: 0, clickCount: i });
+    }
+  };
+
+  const press = async (key, virtualKeyCode) => {
+    for (const type of ['rawKeyDown', 'keyUp']) {
+      await page.send('Input.dispatchKeyEvent', {
+        type, key, code: key, windowsVirtualKeyCode: virtualKeyCode, nativeVirtualKeyCode: virtualKeyCode,
+      });
+    }
+  };
+
+  /** The resync is dispatched on an animation frame, so it lands after the input
+   *  that caused it: waited for rather than assumed. */
+  const waitForResync = () =>
+    page.waitFor(`(() => {
+      const f = document.querySelector('#movie_player'), v = f?.querySelector('video');
+      return !!v && Math.abs(v.getBoundingClientRect().width - f.getBoundingClientRect().width) <= 1;
+    })()`, 'the Player to resync its internals', 10_000);
+
+  test('the Splitter is a separator between the Player and the Comment Pane', async () => {
+    const r = await page.eval(`(() => {
+      const h = document.querySelector('#ysc-splitter');
+      const pane = document.querySelector('#ysc-pane');
+      const b = h?.getBoundingClientRect();
+      h?.focus();
+      const centre = b.left + b.width / 2;
+      return {
+        inRail: !!document.querySelector('#secondary-inner > #ysc-splitter'),
+        beforePane: !!(h.compareDocumentPosition(pane) & Node.DOCUMENT_POSITION_FOLLOWING),
+        role: h.getAttribute('role'),
+        orientation: h.getAttribute('aria-orientation'),
+        label: h.getAttribute('aria-label'),
+        focusable: h.tabIndex === 0,
+        focused: document.activeElement === h,
+        separatorBetween:
+          Math.abs(centre - pane.getBoundingClientRect().left) <= 1 &&
+          centre >= document.querySelector('#player').getBoundingClientRect().right - 1,
+        // Hit-testable exactly where it is drawn: a straddling divider that no
+        // pointer event can reach is a divider nobody can drag.
+        hittable: document.elementFromPoint(centre, b.top + 20) === h,
+        height: +b.height.toFixed(1),
+        paneHeight: +pane.getBoundingClientRect().height.toFixed(1),
+      };
+    })()`);
+
+    assert.equal(r.inRail, true, 'the Splitter is not in the rail beside the Comment Pane');
+    assert.equal(r.beforePane, true, 'the Splitter does not come before the Comment Pane');
+    assert.equal(r.role, 'separator', 'the Splitter is not exposed as a separator');
+    assert.equal(r.orientation, 'vertical', 'the separator is not vertical');
+    assert.ok(/Comment Pane/.test(r.label), `the Splitter is not labelled for what it does: ${r.label}`);
+    assert.equal(r.focusable, true, 'the Splitter cannot take focus');
+    assert.equal(r.focused, true, 'the Splitter did not take focus');
+    assert.equal(r.separatorBetween, true, 'the Splitter is not between the Player and the Comment Pane');
+    assert.equal(r.hittable, true, 'no pointer event can reach the Splitter where it is drawn');
+    assert.ok(
+      Math.abs(r.height - r.paneHeight) <= 1,
+      `the Splitter is ${r.height}px tall beside a ${r.paneHeight}px Comment Pane`,
+    );
+  });
+
+  test('dragging the Splitter resizes the Comment Pane and the Player keeps up', async () => {
+    const before = await splitterGeometry();
+    const delta = 240;
+    let mid;
+    await dragSplitter(delta, {
+      during: async ({ x, y }) => {
+        mid = await page.eval(`(() => {
+          const under = document.elementFromPoint(${x}, ${y});
+          return {
+            locked: document.documentElement.hasAttribute('data-ysc-drag'),
+            cursor: under ? getComputedStyle(under).cursor : null,
+            selected: String(getSelection()).length,
+            applied: parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--ysc-pane-width')),
+          };
+        })()`);
+      },
+    });
+    await waitForResync();
+    const after = await splitterGeometry();
+
+    // The Pane followed the pointer, and the width came out of the Player.
+    assert.ok(
+      Math.abs(after.applied - (before.applied + delta)) <= 1,
+      `a ${delta}px drag left the Comment Pane at ${after.applied}px, not ${before.applied + delta}px`,
+    );
+    assert.ok(
+      Math.abs(after.frame.width - (before.frame.width - delta)) <= 1,
+      `the Player is ${after.frame.width}px wide after losing ${delta}px, not ${before.frame.width - delta}px`,
+    );
+
+    // The Player's internals followed its frame. The inline width is the one
+    // that goes stale: it started at the old frame width, so a Player left
+    // unresynced would still be holding it.
+    assert.ok(
+      after.frame.width !== before.frame.width,
+      'the drag did not change the Player frame, so nothing was measured',
+    );
+    assert.ok(
+      Math.abs(after.inline - after.frame.width) <= 2,
+      `the <video> is ${after.inline}px inside a ${after.frame.width}px frame — the Player kept a stale width`,
+    );
+    assert.ok(
+      after.video.width - after.frame.width <= 1,
+      `the <video> overflows its Player frame by ${(after.video.width - after.frame.width).toFixed(1)}px`,
+    );
+    assert.ok(
+      after.bar === null || after.bar.width - after.frame.width <= 1,
+      `the control bar overflows its Player frame by ${(after.bar.width - after.frame.width).toFixed(1)}px`,
+    );
+
+    // The Pane was already halfway there when the pointer was halfway there:
+    // it follows the drag rather than jumping to where the gesture ended.
+    assert.ok(
+      Math.abs(mid.applied - (before.applied + delta / 2)) <= 2,
+      `the Pane was ${mid.applied}px wide with the pointer halfway, not ${before.applied + delta / 2}px`,
+    );
+    // And the gesture itself was a deliberate one, not a page-wide text sweep.
+    assert.equal(mid.locked, true, 'the drag did not lock the page against text selection');
+    assert.equal(mid.selected, 0, 'dragging the Splitter selected page text');
+    assert.equal(mid.cursor, 'col-resize', `the cursor during the drag was ${mid.cursor}`);
+  });
+
+  test('the Comment Pane stops at its floor and its ceiling', async () => {
+    const start = await splitterGeometry();
+    // Past the ceiling: the pointer goes to the window's left edge.
+    await dragSplitter(start.pane.left);
+    await waitForResync();
+    const wide = await splitterGeometry();
+    const ceiling = Math.min(start.container * 0.6, start.container - 480);
+    assert.ok(
+      Math.abs(wide.applied - ceiling) <= 1,
+      `the Pane stopped at ${wide.applied}px, not the ${ceiling}px ceiling`,
+    );
+    assert.ok(
+      wide.frame.width >= 480,
+      `the ceiling left the Player ${wide.frame.width}px wide, inside the band never measured`,
+    );
+    // YouTube's own floor on that column is ~853px. Reaching the ceiling at all
+    // means the drag walked straight through it — which it only can because the
+    // Adapter overrides `min-width` down the Player's whole chain of ancestors.
+    assert.ok(
+      wide.frame.width < 853,
+      `the drag stopped at ${wide.frame.width}px, at YouTube's own column floor rather than the ceiling`,
+    );
+
+    // And past the floor, without leaving the window.
+    await dragSplitter(-1000);
+    await waitForResync();
+    const narrow = await splitterGeometry();
+    assert.equal(narrow.applied, 320, `the Pane shrank to ${narrow.applied}px, past its 320px floor`);
+    assert.ok(narrow.frame.width > 300, `the Player was squeezed to ${narrow.frame.width}px`);
+    assert.ok(
+      Math.abs(narrow.inline - narrow.frame.width) <= 2,
+      'the Player kept a stale width after the Pane hit its floor',
+    );
+
+    await clickSplitter(2); // leave the Pane at its default for what follows
+    await waitForResync();
+  });
+
+  test('the arrow keys move the Splitter, and double-click puts it back', async () => {
+    await clickSplitter(1);
+    const focused = await page.eval(`document.activeElement?.id ?? null`);
+    assert.equal(focused, 'ysc-splitter', 'clicking the Splitter did not focus it');
+
+    const before = await splitterGeometry();
+    await press('ArrowLeft', 37);
+    await press('ArrowLeft', 37);
+    assert.equal(
+      (await splitterGeometry()).applied,
+      before.applied + 2 * KEYBOARD_STEP,
+      'the arrow keys did not move the Splitter by the same amount as each other',
+    );
+    await press('ArrowRight', 39);
+    assert.equal(
+      (await splitterGeometry()).applied,
+      before.applied + KEYBOARD_STEP,
+      'the right arrow did not undo one left arrow',
+    );
+
+    await clickSplitter(2);
+    assert.equal(
+      (await splitterGeometry()).applied,
+      402,
+      'double-clicking the Splitter did not restore the default width',
+    );
+  });
+
+  test('a burst of width changes costs one Player resync per frame, not one each', async () => {
+    await clickSplitter(1);
+    await page.eval(`(() => {
+      window.__resizes = 0; window.__frames = 0;
+      addEventListener('resize', () => { window.__resizes++; });
+      const tick = () => { window.__frames++; window.__frame = requestAnimationFrame(tick); };
+      window.__frame = requestAnimationFrame(tick);
+    })()`);
+
+    // Key events are discrete — Chrome coalesces pointer moves but never these —
+    // so eight presses sent together are eight width changes inside one frame.
+    // Undebounced, each would be a full Player relayout in that same frame.
+    await Promise.all(Array.from({ length: 8 }, () => press('ArrowLeft', 37)));
+    // The frame count stops with the burst, so the frames that pass while the
+    // Pane is left alone cannot flatter the comparison.
+    await page.eval(`cancelAnimationFrame(window.__frame)`);
+    await sleep(300);
+
+    const r = await page.eval(`({ resizes: window.__resizes, frames: window.__frames })`);
+    assert.ok(r.resizes > 0, 'no resize was dispatched for eight width changes');
+    assert.ok(
+      r.resizes <= r.frames + 1,
+      `${r.resizes} Player resyncs for eight width changes in ${r.frames} frames — not debounced`,
+    );
+  });
+
+  /** Last of the Splitter's tests, and the reason it goes last: it loads another
+   *  page, so everything after it starts from a fresh document. */
+  test('the width is one global preference, not a fact about one video', async () => {
+    await dragSplitter(160);
+    await waitForResync();
+    const chosen = (await splitterGeometry()).applied;
+    assert.ok(chosen > 402, 'the drag did not change the width, so nothing was persisted');
+    await sleep(500); // the commit is a storage write, not a repaint
+
+    // A different video, loaded as a new document: the content script starts
+    // over and has nothing but the stored preference to go on. The marker is
+    // what proves the document in front of us is the new one — waiting on the
+    // Pane alone would pass on the page being replaced.
+    await page.eval(`window.__before = true`);
+    await page.send('Page.navigate', { url: OTHER_URL });
+    await page.waitFor(`window.__before === undefined`, 'the next video to load', 60_000);
+    await page.waitFor(
+      `!!document.querySelector('#ysc-pane ytd-comment-thread-renderer')`,
+      'the Comment Pane on the next video',
+      90_000,
+    );
+    const restored = await page.eval(
+      `parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--ysc-pane-width'))`,
+    );
+    assert.ok(
+      Math.abs(restored - chosen) <= 1,
+      `the next video opened with a ${restored}px Pane, not the ${chosen}px it was left at`,
+    );
   });
 
   test('a video YouTube delivers no comments for Steps Aside, leaving no empty Pane', async () => {

@@ -2,6 +2,9 @@
    Native Layout is a single deletion rather than an unwinding. */
 :root {
   --ysc-pane-width: 402px;
+  /* The Pane shares the Player's height, which the Adapter measures and
+     overrides this with. Until it has, the viewport is the best guess. */
+  --ysc-pane-height: calc(100vh - var(--ytd-watch-flexy-masthead-height, 56px));
 }
 
 #ysc-pane {
@@ -28,6 +31,37 @@ html[data-ysc='on'] #movie_player {
 html[data-ysc='on'] #ysc-pane {
   position: sticky;
   top: var(--ytd-watch-flexy-masthead-height, 56px);
-  max-height: calc(100vh - var(--ytd-watch-flexy-masthead-height, 56px));
+  max-height: var(--ysc-pane-height);
   overflow-y: auto;
+}
+
+/* The Splitter straddles the boundary, so it costs the Player and the Pane no
+   width between them; it is as tall as the Pane it resizes. */
+html[data-ysc='on'] #secondary-inner {
+  position: relative;
+}
+html[data-ysc='on'] #ysc-splitter {
+  position: absolute;
+  top: 0;
+  left: -5px;
+  width: 10px;
+  height: var(--ysc-pane-height);
+  z-index: 60;
+  cursor: col-resize;
+  /* Without this a touch drag arrives as a scroll and never becomes a gesture. */
+  touch-action: none;
+}
+html[data-ysc='on'] #ysc-splitter:hover,
+html[data-ysc='on'] #ysc-splitter:focus-visible {
+  background: var(--yt-spec-10-percent-layer, rgba(128, 128, 128, 0.25));
+  outline: none;
+}
+
+/* A drag in flight owns the whole page: no text may be selected by it, and the
+   cursor stays a resize cursor over every element it crosses. */
+html[data-ysc-drag] {
+  user-select: none;
+}
+html[data-ysc-drag] * {
+  cursor: col-resize !important;
 }

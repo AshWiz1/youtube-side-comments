@@ -11,9 +11,10 @@
       "run_at": "document_idle"
     }
   ],
+  "permissions": ["storage"],
   "web_accessible_resources": [
     {
-      "resources": ["src/engine.js", "src/adapter.js"],
+      "resources": ["src/engine.js", "src/adapter.js", "src/splitter.js"],
       "matches": ["https://www.youtube.com/*"]
     }
   ]

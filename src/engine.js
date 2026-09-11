@@ -45,14 +45,30 @@ export const PLACE = {
  *  exactly the space the Recommendation Strip vacated. */
 export const DEFAULT_PANE_WIDTH = 402;
 
+/** The narrowest the Comment Pane may become. Not arbitrary: this is
+ *  `--ytd-watch-flexy-sidebar-min-width`, the minimum YouTube itself applies to
+ *  that column. */
+export const MIN_PANE_WIDTH = 320;
+
+/** The narrowest Player we have measured. Widths below it were never measured,
+ *  and the ceiling keeps the layout out of that band. */
+export const MIN_PLAYER_WIDTH = 480;
+
+/** The most of the container the Comment Pane may take. */
+export const MAX_PANE_FRACTION = 0.6;
+
 /**
  * The narrowest viewport our layout can serve: the Pane's floor (320px, the
  * minimum YouTube applies to that column) plus the narrowest Player we have
  * measured (480px). Used **only** when YouTube's own column signal is missing —
  * YouTube's signal is the authority on where two columns stop working, and it
  * collapses at a wider viewport than this.
+ *
+ * The same sum is the ceiling's second term, which is not a coincidence: where
+ * the container is too small for both, the two clamps meet and the layout has
+ * already Stepped Aside.
  */
-export const MIN_TWO_COLUMN_VIEWPORT = 800;
+export const MIN_TWO_COLUMN_VIEWPORT = MIN_PANE_WIDTH + MIN_PLAYER_WIDTH;
 
 /**
  * Decide what to do with the page in front of us.
@@ -68,7 +84,10 @@ export const MIN_TWO_COLUMN_VIEWPORT = 800;
  * page, not a fact about how much of it has loaded yet.
  *
  * @param {object} state
- * @param {{width: number}} state.viewport  Viewport measurements.
+ * @param {{width: number, container?: number}} state.viewport  `width` is the
+ *   viewport; `container` is the box the Player and the Comment Pane share,
+ *   which the width ceiling is a fraction of. A page that cannot say how wide
+ *   that box is falls back to the viewport, which is what it usually equals.
  * @param {object} state.page               What the page actually is.
  * @param {object} state.prefs              The user's stored preferences.
  * @returns {{action: string, reason?: string, paneWidth?: number, placement?: object}}
@@ -106,9 +125,52 @@ export function decide({ viewport, page, prefs }) {
 
   return {
     action: ACTION.APPLY,
-    paneWidth: resolveWidth(prefs.paneWidth),
+    paneWidth: resolvePaneWidth(prefs.paneWidth, viewport.container ?? viewport.width),
     placement: { comments: PLACE.PANE, related: PLACE.NATIVE },
   };
+}
+
+/**
+ * The width the Comment Pane takes, from a request of any origin — a stored
+ * preference, a drag, an arrow key. This is the **only** place a requested
+ * width becomes a width, which is what makes it impossible for the pointer and
+ * the keyboard to disagree about where the limits are.
+ *
+ * A request is a request, not an instruction: anything that isn't a usable
+ * number falls back to the default rather than being trusted.
+ *
+ * @param {number} requested  The width asked for, in pixels.
+ * @param {number} container  The width the Player and the Pane share.
+ */
+export function resolvePaneWidth(requested, container) {
+  const wanted = usable(requested) ? requested : DEFAULT_PANE_WIDTH;
+  return Math.min(Math.max(wanted, MIN_PANE_WIDTH), paneCeiling(container));
+}
+
+/**
+ * The widest the Comment Pane may become: **the lesser of 60% of the container
+ * and the container minus the narrowest measured Player**.
+ *
+ * The second term is the one that keeps the layout out of territory we never
+ * measured — Player widths below 480px — and it binds for any container under
+ * 1200px. The two terms cross at 800px, which is also the viewport our own
+ * guard Steps Aside on.
+ *
+ * Where a container is small enough for the ceiling to fall under the floor the
+ * **floor wins**, because the floor is the rail's own `min-width`: a Pane
+ * narrower than it is not something the page would honour anyway. That leaves a
+ * Player narrower than we have measured, on a page where YouTube still calls
+ * itself two columns — which is a page we applied on before this clamp existed,
+ * and applied on with less to spare.
+ */
+export function paneCeiling(container) {
+  // No container to divide is no ceiling to apply; the floor and the default
+  // still hold, since neither depends on the page.
+  if (!usable(container)) return Infinity;
+  return Math.max(
+    MIN_PANE_WIDTH,
+    Math.min(container * MAX_PANE_FRACTION, container - MIN_PLAYER_WIDTH),
+  );
 }
 
 /** `isSingleColumn` is tri-state: true, false, or unknown (`null`) when the page
@@ -121,12 +183,6 @@ function stepAside(reason) {
   return { action: ACTION.STEP_ASIDE, reason };
 }
 
-/**
- * A stored width is a preference, not an instruction: anything that isn't a
- * usable number falls back to the default rather than being trusted.
- */
-function resolveWidth(stored) {
-  return typeof stored === 'number' && Number.isFinite(stored) && stored > 0
-    ? stored
-    : DEFAULT_PANE_WIDTH;
+function usable(value) {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0;
 }

@@ -7,16 +7,41 @@
  * never anything sensitive.
  */
 (async () => {
-  const [{ decide, ACTION, REASON }, { createAdapter }] = await Promise.all([
-    import(chrome.runtime.getURL('src/engine.js')),
-    import(chrome.runtime.getURL('src/adapter.js')),
-  ]);
+  const [{ decide, resolvePaneWidth, ACTION, REASON }, { createAdapter }, { createSplitter }] =
+    await Promise.all([
+      import(chrome.runtime.getURL('src/engine.js')),
+      import(chrome.runtime.getURL('src/adapter.js')),
+      import(chrome.runtime.getURL('src/splitter.js')),
+    ]);
 
-  const adapter = createAdapter(document);
+  /** One global width, deliberately: a setting, not a per-video chore. */
+  const PANE_WIDTH_KEY = 'paneWidth';
+  // Absent if the extension were loaded without the storage permission, which
+  // must not cost the whole layout.
+  const store = chrome.storage?.local;
+
   // The user's stored preference arrives with the popup; until then, on.
-  const prefs = { enabled: true };
+  const prefs = { enabled: true, paneWidth: null };
   let last = null;
   let watching = false;
+
+  const splitter = createSplitter({
+    doc: document,
+    // Pointer and keyboard both resolve through the engine's own clamp — the
+    // same function `decide` uses — so the two cannot disagree about the limits.
+    resolve: (requested) => resolvePaneWidth(requested, adapter.containerWidth()),
+    getWidth: () => adapter.paneWidth(),
+    onResize: (width) => {
+      // Kept in step with the Pane as it moves, so a re-decide mid-drag agrees
+      // with what is already on screen instead of snapping it back.
+      prefs.paneWidth = width;
+      adapter.setPaneWidth(width);
+    },
+    onCommit: (width) => {
+      store?.set({ [PANE_WIDTH_KEY]: width });
+    },
+  });
+  const adapter = createAdapter(document, { splitter: splitter.handle });
 
   const run = (force) => {
     const decision = decide(adapter.readState(prefs));
@@ -24,7 +49,18 @@
     // actually changes keeps a run of resizes — or the Splitter's own drag —
     // from moving the Comments over and over, which would drop the reader's
     // place in the thread for no reason.
-    if (force || decision.action !== last?.action || decision.reason !== last?.reason) {
+    //
+    // The width is part of that comparison, and has to be: a width change is the
+    // one decision the page makes without any of the others changing, so a
+    // comparison that looks only at the action would leave the Pane at a width
+    // the engine no longer agrees with — after a restart, after the container
+    // narrows under it, or after anything else moves the ceiling.
+    if (
+      force ||
+      decision.action !== last?.action ||
+      decision.reason !== last?.reason ||
+      decision.paneWidth !== last?.paneWidth
+    ) {
       adapter.apply(decision);
     }
     last = decision;
@@ -45,6 +81,12 @@
   // `yt-navigate-finish` fires on both a cold load and an in-page navigation,
   // so one listener covers arriving at a Watch Page either way.
   const start = () => settle(Date.now() + 10_000);
+
+  // Read before the first decision, so the Pane is never briefly arranged at a
+  // width the reader did not choose and then corrected.
+  const stored = store ? await store.get(PANE_WIDTH_KEY).catch(() => null) : null;
+  // Whether the stored value is usable is the engine's call, not ours.
+  prefs.paneWidth = stored?.[PANE_WIDTH_KEY] ?? null;
 
   start();
   window.addEventListener('yt-navigate-finish', start);
