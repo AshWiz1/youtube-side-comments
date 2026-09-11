@@ -15,10 +15,22 @@
   const adapter = createAdapter(document);
   // The user's stored preference arrives with the popup; until then, on.
   const prefs = { enabled: true };
+  let last = null;
+  let watching = false;
 
-  const run = () => {
+  const run = (force) => {
     const decision = decide(adapter.readState(prefs));
-    adapter.apply(decision);
+    // Deciding is cheap; arranging is not. Acting only when the decision
+    // actually changes keeps a run of resizes — or the Splitter's own drag —
+    // from moving the Comments over and over, which would drop the reader's
+    // place in the thread for no reason.
+    if (force || decision.action !== last?.action || decision.reason !== last?.reason) {
+      adapter.apply(decision);
+    }
+    last = decision;
+    // YouTube's watch root does not exist until it has built one, so keep
+    // asking: a page that arrives late must still be watched for mode changes.
+    watching ||= adapter.observeModes(() => run(false));
     // YouTube builds a Watch Page asynchronously, so a run that lands before
     // the Comments exist is *early*, not unrecognised. Retrying that one reason
     // keeps a slow load from Stepping Aside on a page that was merely young.
@@ -26,7 +38,7 @@
   };
 
   const settle = (deadline) => {
-    if (run() || Date.now() >= deadline) return;
+    if (run(true) || Date.now() >= deadline) return;
     setTimeout(settle, 250, deadline);
   };
 
@@ -36,4 +48,16 @@
 
   start();
   window.addEventListener('yt-navigate-finish', start);
+
+  // A window that narrows far enough for YouTube to collapse to one column has
+  // to Step Aside — the Comment Pane lives in the rail YouTube is hiding, which
+  // is exactly how the Comments silently disappear. The Adapter marks the
+  // resizes it dispatches, so its own resync cannot re-enter here.
+  window.addEventListener('resize', (event) => {
+    if (!event.ysc) run(false);
+  });
+  // A resize is not enough on its own: YouTube answers one in its own time, and
+  // fullscreen has no attribute at all. So the extension also listens to
+  // YouTube changing its own mind, and to the document going fullscreen.
+  document.addEventListener('fullscreenchange', () => run(false));
 })();

@@ -1,36 +1,75 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { decide, ACTION, REASON, PLACE, DEFAULT_PANE_WIDTH } from '../src/engine.js';
+import {
+  decide,
+  ACTION,
+  REASON,
+  PLACE,
+  DEFAULT_PANE_WIDTH,
+  MIN_TWO_COLUMN_VIEWPORT,
+} from '../src/engine.js';
 
-const state = ({ page = {}, prefs = {} } = {}) => ({
-  viewport: { width: 1920 },
-  page: { isWatchPage: true, structureRecognised: true, ...page },
+/** An ordinary desktop Watch Page: two columns by YouTube's own signal. */
+const state = ({ viewport = {}, page = {}, prefs = {} } = {}) => ({
+  viewport: { width: 1920, ...viewport },
+  page: { isWatchPage: true, structureRecognised: true, isSingleColumn: false, ...page },
   prefs: { enabled: true, paneWidth: null, ...prefs },
 });
 
-const cases = [
+/** Every trigger, one per row. */
+const triggers = [
   ['off switch', { prefs: { enabled: false } }, REASON.DISABLED],
+  ['Shorts', { page: { isShorts: true } }, REASON.SHORTS],
   ['not a Watch Page', { page: { isWatchPage: false } }, REASON.NOT_WATCH_PAGE],
+  ['fullscreen', { page: { isFullscreen: true } }, REASON.FULLSCREEN],
+  ['theater mode', { page: { isTheater: true } }, REASON.THEATER],
+  ['a live chat', { page: { hasLiveChat: true } }, REASON.LIVE_CHAT],
+  ['an open YouTube panel', { page: { hasOpenPanel: true } }, REASON.OPEN_PANEL],
   ['unknown structure', { page: { structureRecognised: false } }, REASON.UNRECOGNISED_STRUCTURE],
+  ['comments disabled', { page: { commentsDisabled: true } }, REASON.COMMENTS_DISABLED],
+  ["YouTube's own single column", { page: { isSingleColumn: true } }, REASON.SINGLE_COLUMN],
+  ["a viewport too narrow, YouTube's signal absent", { page: { isSingleColumn: null }, viewport: { width: 700 } }, REASON.TOO_NARROW],
+  ['a viewport one pixel under the fallback', { page: { isSingleColumn: null }, viewport: { width: 799 } }, REASON.TOO_NARROW],
 ];
-for (const [name, s, reason] of cases) {
+for (const [name, s, reason] of triggers) {
   test(`steps aside: ${name}`, () => {
     assert.deepEqual(decide(state(s)), { action: ACTION.STEP_ASIDE, reason });
   });
 }
 
-test('off switch outranks other reasons', () => {
-  const s = state({ page: { isWatchPage: false }, prefs: { enabled: false } });
-  assert.equal(decide(s).reason, REASON.DISABLED);
-});
-
-test('applies: comments to the pane, related left native', () => {
-  assert.deepEqual(decide(state()), {
-    action: ACTION.APPLY,
-    paneWidth: DEFAULT_PANE_WIDTH,
-    placement: { comments: PLACE.PANE, related: PLACE.NATIVE },
+const applies = [
+  ['an ordinary Watch Page', {}],
+  ['a viewport 400px narrower than YouTube needs', { viewport: { width: 700 } }],
+  ['the fallback threshold exactly', { page: { isSingleColumn: null }, viewport: { width: MIN_TWO_COLUMN_VIEWPORT } }],
+  ["YouTube's signal absent but room to spare", { page: { isSingleColumn: null } }],
+];
+for (const [name, s] of applies) {
+  test(`applies: ${name}`, () => {
+    assert.deepEqual(decide(state(s)), {
+      action: ACTION.APPLY,
+      paneWidth: DEFAULT_PANE_WIDTH,
+      placement: { comments: PLACE.PANE, related: PLACE.NATIVE },
+    });
   });
-});
+}
+
+// The spec's rule for overlaps: the reason reported is the first trigger that
+// matches, and the order is the engine's to choose — so pin it down.
+const firsts = [
+  ['the off switch outranks everything', { prefs: { enabled: false }, page: { isShorts: true, isTheater: true } }, REASON.DISABLED],
+  ['Shorts outranks another page', { page: { isShorts: true, isWatchPage: false } }, REASON.SHORTS],
+  ['fullscreen outranks theater', { page: { isFullscreen: true, isTheater: true } }, REASON.FULLSCREEN],
+  ['a live chat outranks an open panel', { page: { hasLiveChat: true, hasOpenPanel: true } }, REASON.LIVE_CHAT],
+  ['a mode outranks the structure', { page: { isTheater: true, structureRecognised: false } }, REASON.THEATER],
+  ['structure outranks no comments', { page: { structureRecognised: false, commentsDisabled: true } }, REASON.UNRECOGNISED_STRUCTURE],
+  ['no room outranks no comments', { page: { commentsDisabled: true, isSingleColumn: true } }, REASON.SINGLE_COLUMN],
+  ["YouTube's column outranks our viewport", { page: { isSingleColumn: true }, viewport: { width: 400 } }, REASON.SINGLE_COLUMN],
+];
+for (const [name, s, reason] of firsts) {
+  test(`first trigger wins: ${name}`, () => {
+    assert.equal(decide(state(s)).reason, reason);
+  });
+}
 
 const widths = [
   [500, 500],
@@ -52,6 +91,14 @@ test('reason strings are stable', () => {
     DISABLED: 'disabled',
     NOT_WATCH_PAGE: 'not-watch-page',
     UNRECOGNISED_STRUCTURE: 'unrecognised-structure',
+    SHORTS: 'shorts',
+    FULLSCREEN: 'fullscreen',
+    THEATER: 'theater',
+    LIVE_CHAT: 'live-chat',
+    OPEN_PANEL: 'open-panel',
+    COMMENTS_DISABLED: 'comments-disabled',
+    SINGLE_COLUMN: 'single-column',
+    TOO_NARROW: 'too-narrow',
   });
 });
 

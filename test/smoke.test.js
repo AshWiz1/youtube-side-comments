@@ -9,7 +9,7 @@
  * carries theater mode, volume, autoplay and quality settings across runs,
  * which produces false results.
  *
- * Requires a network and Chrome, and takes about eight seconds. It never skips
+ * Requires a network and Chrome, and takes about twenty seconds. It never skips
  * on its own — every problem, including an unreachable YouTube or a missing
  * Chrome, is a failure carrying the page state that caused it. `YSC_SKIP_SMOKE=1`
  * is the one deliberate way out, for offline runs.
@@ -27,12 +27,50 @@ const WATCH_URL = process.env.YSC_SMOKE_URL || 'https://www.youtube.com/watch?v=
 /** Shared in-page helpers. `onScreen` is the only real visibility test: a
  *  non-zero box can still be scrolled out of a clipping ancestor. */
 const PRELUDE = `
+  const sig = (e) => e ? (e.tagName || '').toLowerCase() + (e.id ? '#' + e.id : '') : null;
+  const chain = (e) => { const a = []; for (let n = e; n && n !== document.documentElement; n = n.parentElement) a.push(sig(n)); return a; };
   const onScreen = (e, clip) => {
     if (!e) return false;
     const r = e.getBoundingClientRect(), c = clip.getBoundingClientRect();
     return r.width > 0 && r.height > 0 &&
       r.left < c.right && r.right > c.left && r.top < c.bottom && r.bottom > c.top;
   };
+`;
+
+/**
+ * Runs in the page before any of its own script, so the Native Layout can be
+ * recorded the instant YouTube builds it — the one moment that is provably
+ * "we never ran". `__paneSeen` then says whether the extension ever applied.
+ */
+const RECORD_NATIVE_LAYOUT = `
+  window.__resizes = 0;
+  window.__paneSeen = false;
+  window.__native = null;
+  addEventListener('resize', () => { window.__resizes++; });
+  const sig = (e) => e ? (e.tagName || '').toLowerCase() + (e.id ? '#' + e.id : '') : null;
+  const chain = (e) => { const a = []; for (let n = e; n && n !== document.documentElement; n = n.parentElement) a.push(sig(n)); return a; };
+  const grab = (records) => {
+    if (records.some((r) => [...r.addedNodes].some((n) => n.id === 'ysc-pane'))) window.__paneSeen = true;
+    const c = document.querySelector('#comments');
+    if (c && !window.__native) {
+      window.__native = { parent: c.parentElement, chain: chain(c.parentElement),
+        prev: sig(c.previousElementSibling), next: sig(c.nextElementSibling) };
+    }
+  };
+  new MutationObserver(grab).observe(document, { childList: true, subtree: true });
+  grab([]);
+`;
+
+/** Forces theater mode onto the watch root as the document is built, which is
+ *  how theater mode actually reaches a page: persisted, not toggled. */
+const LOAD_IN_THEATER = `
+  const arm = () => {
+    const root = document.querySelector('#primary')?.closest('[is-two-columns_],[is-single-column]')
+      || document.querySelector('[is-two-columns_],[is-single-column]');
+    if (root) root.setAttribute('theater', '');
+  };
+  new MutationObserver(arm).observe(document, { childList: true, subtree: true });
+  arm();
 `;
 
 // An explicit, deliberate opt-out for offline runs — never an automatic one.
@@ -44,12 +82,7 @@ describe('Comment Pane on a real Watch Page', { skip: SKIP }, () => {
 
   before(async () => {
     browser = await launch({ extension: EXTENSION });
-    page = await newPage(browser, WATCH_URL, {
-      // Count the resize events the Adapter dispatches. YouTube attaches no
-      // observer to the Player, so this is the only thing that resyncs the
-      // video element and control bar when the player column changes width.
-      preload: `window.__resizes = 0; addEventListener('resize', () => { window.__resizes++; });`,
-    });
+    page = await newPage(browser, WATCH_URL, { preload: RECORD_NATIVE_LAYOUT });
 
     try {
       await page.waitFor(`!!document.querySelector('#primary')`, 'a desktop Watch Page', 60_000);
@@ -76,6 +109,53 @@ describe('Comment Pane on a real Watch Page', { skip: SKIP }, () => {
     page?.close();
     await browser?.close();
   });
+
+  /** A Step Aside is only honest if the page is indistinguishable from one the
+   *  extension never ran on: exactly the Native Layout, plus the reason. */
+  const stepAside = async (reason) => {
+    await page.waitFor(
+      `document.documentElement.dataset.yscReason === '${reason}'`,
+      `a Step Aside for ${reason}`,
+      15_000,
+    );
+    const r = await page.eval(`(() => { ${PRELUDE}
+      const comments = document.querySelector('#comments');
+      return {
+        reason: document.documentElement.dataset.yscReason ?? null,
+        applied: document.documentElement.dataset.ysc ?? null,
+        inline: document.documentElement.style.getPropertyValue('--ysc-pane-width'),
+        pane: !!document.getElementById('ysc-pane'),
+        residue: [...document.querySelectorAll('body *')]
+          .filter((e) => (e.id || '').includes('ysc') || [...e.attributes].some((a) => a.name.includes('ysc'))).length,
+        sameParent: comments?.parentElement === window.__native?.parent,
+        chain: chain(comments?.parentElement).join('<'),
+        nativeChain: (window.__native?.chain || []).join('<'),
+        prev: sig(comments?.previousElementSibling),
+        next: sig(comments?.nextElementSibling),
+        nativePrev: window.__native?.prev,
+        nativeNext: window.__native?.next,
+        inRail: !!document.querySelector('#secondary-inner #comments'),
+      };
+    })()`);
+
+    assert.equal(r.reason, reason, 'the Step Aside reason was not recorded');
+    assert.equal(r.applied, null, 'the root still carries the layout attribute');
+    assert.equal(r.inline, '', 'an inline pane width was left on the root');
+    assert.equal(r.pane, false, 'the Comment Pane was left behind');
+    assert.equal(r.residue, 0, 'the extension left its own attributes on the page');
+    assert.equal(r.sameParent, true, 'the Comments are not back at their exact original parent');
+    assert.equal(r.chain, r.nativeChain, 'the Comments are back at the wrong nesting depth');
+    assert.equal(r.prev, r.nativePrev, 'the Comments moved relative to the element before them');
+    assert.equal(r.next, r.nativeNext, 'the Comments moved relative to the element after them');
+    assert.equal(r.inRail, false, 'the Comments are still in the right rail');
+  };
+
+  /** Put a forced page fact back and let the extension re-decide, so that the
+   *  next test starts from an applied layout rather than a stepped-aside one. */
+  const reapply = async () => {
+    await page.eval(`window.dispatchEvent(new CustomEvent('yt-navigate-finish'))`);
+    await page.waitFor(`document.documentElement.dataset.ysc === 'on'`, 'the layout to be applied', 15_000);
+  };
 
   test('the Comment Pane exists and holds the Comments', async () => {
     const r = await page.eval(`(() => {
@@ -222,6 +302,103 @@ describe('Comment Pane on a real Watch Page', { skip: SKIP }, () => {
     }
   });
 
+  test('theater mode Steps Aside and restores the Native Layout exactly', async () => {
+    // Theater mode persists across loads, so YouTube's own signal for it is an
+    // attribute on the watch root — forced directly here rather than clicked
+    // for, since the extension's whole input is that attribute.
+    const on = await page.eval(`(() => {
+      const root = document.querySelector('#primary')?.closest('[is-two-columns_],[is-single-column]');
+      root.setAttribute('theater', '');
+      window.dispatchEvent(new CustomEvent('yt-navigate-finish'));
+      return !!root;
+    })()`);
+    assert.equal(on, true, 'no watch root to put into theater mode');
+
+    await stepAside('theater');
+
+    await page.eval(`(() => {
+      document.querySelector('[theater]').removeAttribute('theater');
+      window.dispatchEvent(new CustomEvent('yt-navigate-finish'));
+      return true;
+    })()`);
+    await page.waitFor(`document.documentElement.dataset.ysc === 'on'`, 'the layout to come back', 15_000);
+    assert.equal(
+      await page.eval(`!!document.querySelector('#ysc-pane #comments')`),
+      true,
+      'the Comments did not return to the Comment Pane after theater mode ended',
+    );
+  });
+
+  test("YouTube's own single column Steps Aside, and outranks our viewport guard", async () => {
+    // Narrower than both YouTube's breakpoint and our own fallback: the reason
+    // recorded has to be YouTube's signal, because a layout applied inside a
+    // column YouTube has hidden is how the Comments silently disappear. No
+    // lifecycle event is fired here — narrowing the window is the whole trigger.
+    await page.send('Emulation.setDeviceMetricsOverride', {
+      width: 700, height: 900, deviceScaleFactor: 1, mobile: false,
+    });
+    await stepAside('single-column');
+
+    // And widening it back brings the layout back, rather than leaving the page
+    // stepped aside for a column that is two columns wide again.
+    await page.send('Emulation.clearDeviceMetricsOverride');
+    await page.waitFor(`document.documentElement.dataset.ysc === 'on'`, 'the layout to come back', 15_000);
+  });
+
+  test("YouTube's own panels Step Aside while they compete for the column", async () => {
+    // An ordinary expanded panel stacks vertically and takes nothing from the
+    // rail, so what is guarded against is the horizontally-docking family that
+    // sits dormant in YouTube's stylesheets — forced here, exactly as theater
+    // mode is, because a dormant flag is not reachable through YouTube's UI.
+    const expanded = await page.eval(`(() => {
+      const panel = document.querySelector('#panels ytd-engagement-panel-section-list-renderer');
+      if (!panel) return 'no panel in the rail';
+      panel.setAttribute('visibility', 'ENGAGEMENT_PANEL_VISIBILITY_EXPANDED');
+      window.dispatchEvent(new CustomEvent('yt-navigate-finish'));
+      return 'expanded';
+    })()`);
+    assert.equal(expanded, 'expanded', expanded);
+    await stepAside('open-panel');
+
+    await page.eval(`(() => {
+      document.querySelector('#panels [visibility="ENGAGEMENT_PANEL_VISIBILITY_EXPANDED"]')?.removeAttribute('visibility');
+      document.querySelector('#primary').closest('[is-two-columns_]').setAttribute('fixed-panels', '');
+      window.dispatchEvent(new CustomEvent('yt-navigate-finish'));
+      return true;
+    })()`);
+    await stepAside('open-panel');
+
+    await page.eval(`document.querySelector('[fixed-panels]').removeAttribute('fixed-panels')`);
+    await reapply();
+  });
+
+  test('a fullscreen document Steps Aside', async () => {
+    // Fullscreen has no attribute to read, so this one is entered for real: a
+    // click for the user activation the browser demands, then the request.
+    const click = { x: 400, y: 300, button: 'left', clickCount: 1 };
+    await page.send('Input.dispatchMouseEvent', { type: 'mousePressed', ...click });
+    await page.send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...click });
+    await page.eval(`document.documentElement.requestFullscreen()`, { awaitPromise: true });
+    await stepAside('fullscreen');
+
+    await page.eval(`document.exitFullscreen()`, { awaitPromise: true });
+    await page.waitFor(`document.documentElement.dataset.ysc === 'on'`, 'the layout to come back', 15_000);
+  });
+
+  test('a video YouTube delivers no comments for Steps Aside, leaving no empty Pane', async () => {
+    // The measured signature of a Watch Page whose response carries no comment
+    // section — taken from live Watch Pages, where the Comments region renders
+    // with nothing in it and the watch root has no `response-has-comments`.
+    // Relocating that region is exactly how an empty Comment Pane happens.
+    await page.eval(`(() => {
+      document.querySelector('#comments').replaceChildren();
+      document.querySelector('[is-two-columns_]').removeAttribute('response-has-comments');
+      window.dispatchEvent(new CustomEvent('yt-navigate-finish'));
+      return true;
+    })()`);
+    await stepAside('comments-disabled');
+  });
+
   test('an unrecognised page Steps Aside and records why', async () => {
     // Destroy the structure the Adapter depends on, exactly as a YouTube
     // change would, and let it re-decide.
@@ -239,5 +416,17 @@ describe('Comment Pane on a real Watch Page', { skip: SKIP }, () => {
       await page.eval(`document.documentElement.dataset.yscReason`),
       'unrecognised-structure',
     );
+  });
+
+  // Last, because it makes theater mode stick: YouTube persists it once it has
+  // seen it, which is the very property this test exists to check.
+  test('theater mode is detected at load, not only on toggle', async () => {
+    await page.send('Page.addScriptToEvaluateOnNewDocument', { source: LOAD_IN_THEATER });
+    await page.send('Page.reload');
+    await stepAside('theater');
+
+    const r = await page.eval(`({ seen: window.__paneSeen, reason: document.documentElement.dataset.yscReason })`);
+    assert.equal(r.reason, 'theater', 'a page that loads in theater mode was not recognised as theater');
+    assert.equal(r.seen, false, 'the layout was applied and undone rather than never applied at all');
   });
 });
