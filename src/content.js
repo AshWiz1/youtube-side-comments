@@ -7,20 +7,29 @@
  * never anything sensitive.
  */
 (async () => {
-  const [{ decide, needsArranging, resolvePaneWidth, ACTION, REASON }, { createAdapter }, { createSplitter }] =
-    await Promise.all([
-      import(chrome.runtime.getURL('src/engine.js')),
-      import(chrome.runtime.getURL('src/adapter.js')),
-      import(chrome.runtime.getURL('src/splitter.js')),
-    ]);
+  const [
+    { decide, needsArranging, resolvePaneWidth, ACTION, REASON },
+    { createAdapter },
+    { createSplitter },
+    { createToggle },
+  ] = await Promise.all([
+    import(chrome.runtime.getURL('src/engine.js')),
+    import(chrome.runtime.getURL('src/adapter.js')),
+    import(chrome.runtime.getURL('src/splitter.js')),
+    import(chrome.runtime.getURL('src/toggle.js')),
+  ]);
 
   /** One global width, deliberately: a setting, not a per-video chore. */
   const PANE_WIDTH_KEY = 'paneWidth';
+  /** The off switch, which is one global preference too — set from inside the
+   *  Comment Pane, and cleared from the toolbar surface that replaces it. */
+  const ENABLED_KEY = 'enabled';
   // Absent if the extension were loaded without the storage permission, which
   // must not cost the whole layout.
   const store = chrome.storage?.local;
 
-  // The user's stored preference arrives with the popup; until then, on.
+  // Replaced by the stored preferences below, before the first decision is
+  // taken; until then, on.
   const prefs = { enabled: true, paneWidth: null };
   /**
    * The decision the arrangement standing on the page was made from, or `null`
@@ -52,7 +61,29 @@
       store?.set({ [PANE_WIDTH_KEY]: width });
     },
   });
-  const adapter = createAdapter(document, { splitter: splitter.handle });
+  const toggle = createToggle({
+    doc: document,
+    // The reader, in the Pane, asking for the Native Layout. The preference is
+    // the whole of what this does: the page is then re-decided like any other,
+    // and the off switch lands in the Adapter's one Step Aside branch — which is
+    // what ticket 02's "the manual off switch routes through the same path as
+    // every automatic trigger" means in code.
+    onOff: () => {
+      prefs.enabled = false;
+      store?.set({ [ENABLED_KEY]: false });
+      run();
+    },
+    // What the Pane's status view is told: the same two markers the toolbar
+    // surface reads, and the stored preference — so both render the one decision
+    // the engine makes from them, through the one function that makes it.
+    read: () => ({
+      enabled: prefs.enabled,
+      applied: document.documentElement.dataset.ysc === 'on',
+      reason: document.documentElement.dataset.yscReason || null,
+      width: adapter.paneWidth(),
+    }),
+  });
+  const adapter = createAdapter(document, { splitter: splitter.handle, toggle: toggle.handle });
 
   const run = () => {
     const decision = decide(adapter.readState(prefs));
@@ -142,10 +173,15 @@
   };
 
   // Read before the first decision, so the Pane is never briefly arranged at a
-  // width the reader did not choose and then corrected.
-  const stored = store ? await store.get(PANE_WIDTH_KEY).catch(() => null) : null;
+  // width the reader did not choose and then corrected — and, for the same
+  // reason, so that a page loaded while the layout is off never shows an
+  // arrangement it would only take back a frame later.
+  const stored = store ? await store.get([PANE_WIDTH_KEY, ENABLED_KEY]).catch(() => null) : null;
   // Whether the stored value is usable is the engine's call, not ours.
   prefs.paneWidth = stored?.[PANE_WIDTH_KEY] ?? null;
+  // Only an explicit `false` turns the layout off: a store that has never been
+  // written, or that holds something else, leaves it on.
+  prefs.enabled = stored?.[ENABLED_KEY] !== false;
 
   start();
   window.addEventListener('yt-navigate-finish', start);
@@ -170,5 +206,16 @@
   // itself — by the time a reader is looking at it, the answer is knowable.
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) resume();
+  });
+
+  // The toolbar surface is the way back from the off switch, and it writes the
+  // same preference. A page that only heard about it on its next reload would
+  // leave the reader looking at the Native Layout they had just asked to leave
+  // — which is the one-way door the toolbar surface exists to prevent — so the
+  // change is followed, and followed at once.
+  chrome.storage?.onChanged?.addListener((changes, area) => {
+    if (area !== 'local' || !(ENABLED_KEY in changes)) return;
+    prefs.enabled = changes[ENABLED_KEY].newValue !== false;
+    run();
   });
 })();

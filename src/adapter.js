@@ -86,20 +86,46 @@ const OPEN_PANEL = '#panels [visibility="ENGAGEMENT_PANEL_VISIBILITY_EXPANDED"]'
 
 /**
  * Live chat lives at `#chat-container` inside the rail. The container is always
- * present; only the frame materialises, and only on a live stream or premiere.
+ * present; a frame inside it is not — and, measured, neither is it only ever a
+ * live stream's. A past stream whose chat replay has never been opened carries
+ * the frame too: empty, `collapsed`, `hide-chat-frame`, no box at all. Read as
+ * "a live chat is here", that frame cost the Comment Pane for a chat nobody
+ * could see, which is the fault `chatInUse` below exists to fix.
  */
 const LIVE_CHAT = '#chat-container ytd-live-chat-frame';
 
-const MODE_FLAGS = [THEATER, TWO_COLUMNS, SINGLE_COLUMN, ...DOCKING_PANEL_MODES];
+/**
+ * YouTube's own statement, on the watch root, that a live chat is **present and
+ * expanded** — which is the question exactly: not whether a chat exists, but
+ * whether one is in the rail and using it. YouTube rewrites it as the reader
+ * collapses or expands the chat, so it is watched with the mode flags below and
+ * the decision follows either way, without waiting for a navigation.
+ */
+const LIVE_CHAT_EXPANDED = 'live-chat-present-and-expanded';
+
+/**
+ * YouTube's own comments header — the row carrying the count and the sort
+ * control — and the section of that row holding the controls beside the count.
+ * The off control goes there rather than in a bar of ours, because a row that
+ * already exists costs the layout no height, and because it is where a reader
+ * already looks for the things that act on the Comments. That is the one place
+ * this extension inserts anything *inside* a YouTube component, which is why it
+ * is watched rather than written once: see `followOff`.
+ */
+const COMMENTS_HEADER = 'ytd-comments-header-renderer';
+const HEADER_CONTROLS = '#additional-section';
+
+const MODE_FLAGS = [THEATER, TWO_COLUMNS, SINGLE_COLUMN, LIVE_CHAT_EXPANDED, ...DOCKING_PANEL_MODES];
 const WATCH_ROOT = MODE_FLAGS.map((flag) => `[${flag}]`).join(',');
 
 /**
  * @param {Document} doc
- * @param {{splitter?: HTMLElement}} [deps]  The Splitter's element, which this
- *   Adapter places in the rail and takes back out, because it owns what goes
- *   into the page. Its behaviour belongs to the Splitter module.
+ * @param {{splitter?: HTMLElement, toggle?: HTMLElement}} [deps]  The Splitter's
+ *   element and the Pane's off control, which this Adapter places and takes back
+ *   out, because it owns what goes into the page. Their behaviour belongs to
+ *   their own modules.
  */
-export function createAdapter(doc, { splitter } = {}) {
+export function createAdapter(doc, { splitter, toggle } = {}) {
   /** Where the Comments came from, so they can be put back exactly. */
   let home = null;
   /** Where the related videos came from, for the same reason: the rail's order
@@ -124,6 +150,11 @@ export function createAdapter(doc, { splitter } = {}) {
    *  one rather than duplicated or left behind. */
   let watchedRoot = null;
   let modeWatch = null;
+  /** The Comments region the off control is being kept in, and the observer
+   *  doing the keeping, for the same reason: YouTube replaces both the region
+   *  and the header inside it, and the control has to follow them. */
+  let watchedOff = null;
+  let offWatch = null;
 
   /**
    * Locate the Watch Page by structure and identifiers rather than by
@@ -217,6 +248,81 @@ export function createAdapter(doc, { splitter } = {}) {
   }
 
   /**
+   * Put the off control in YouTube's comments header, and keep it there.
+   *
+   * It goes beside the sort control, in the row that already carries the count —
+   * so it takes no room the Pane was not already spending, and it sits with the
+   * things that act on the Comments rather than in chrome of our own.
+   *
+   * What that costs is ownership: the header is YouTube's, and YouTube rebuilds
+   * it — the count arrives, the sort menu is re-rendered, the whole header is
+   * replaced outright — and a node inserted into it once is gone the first time
+   * that happens, which would leave the layout with no way out of it but the
+   * toolbar. So the region holding the header is watched, and the control is put
+   * back whenever it goes or the header it was in goes with it.
+   *
+   * It is in the page exactly when the Comments are in the Pane — a page we have
+   * Stepped Aside from carries nothing of ours, this included — which is read
+   * from the Pane holding the region rather than from the decision, so the two
+   * cannot disagree.
+   */
+  function followOff() {
+    const comments = doc.getElementById(PANE_ID)?.querySelector(COMMENTS);
+    if (!toggle || !comments) {
+      toggle?.remove();
+      return;
+    }
+    // Watched before it is placed, because the header arrives with YouTube's own
+    // build, which can be later than the layout that waited for it.
+    if (comments !== watchedOff) {
+      offWatch?.disconnect();
+      watchedOff = comments;
+      offWatch = new MutationObserver(() => followOff());
+      // The region and not the header alone: a header YouTube replaces arrives
+      // as a child of the region, and this has to hear about that too.
+      offWatch.observe(comments, { childList: true, subtree: true });
+    }
+    const header = comments.querySelector(COMMENTS_HEADER);
+    // A region YouTube has not built its header into yet is a region with
+    // nowhere to put this, and it is asked again by the observer above.
+    if (!header) {
+      toggle.remove();
+      return;
+    }
+    const home = header.querySelector(HEADER_CONTROLS) ?? header.firstElementChild ?? header;
+    if (toggle.parentElement !== home) home.append(toggle);
+  }
+
+  /**
+   * Whether a live chat is in the rail and using it.
+   *
+   * Either of YouTube's own signals is enough, and either alone would have done
+   * for every page measured — so both are read, because they fail in opposite
+   * directions. The root's flag is the statement wanted and moves with the chat;
+   * a frame with a real box is there for a page showing a chat without saying
+   * so. The second is deliberately the conservative one — **anything with a box
+   * counts** — so that a trigger which fails to fire can only fail towards the
+   * Comment Pane, never towards a chat being displaced.
+   *
+   * Measured, 2026-09-12, on pages of both kinds, which is where the reading
+   * comes from rather than from the shape of YouTube's markup:
+   *
+   * - Four live streams (`hlsnI3v2YX4`, `-LP3d7a71zQ`, `EMMkB01USUw`,
+   *   `vfszY1JYbMc`): every one carries `live-chat-present-and-expanded` on the
+   *   watch root, and has a frame at 515×809, `display: flex` — a chat in the
+   *   rail, and the Comment Pane correctly given up for it.
+   * - The page this was reported against (`jvczxxUUqNs`, a 22-minute upload):
+   *   no flag, and a frame at 0×0, `display: none`, `collapsed`,
+   *   `hide-chat-frame`, with `#chat-container` holding nothing. The Pane was
+   *   given up anyway, and should not have been.
+   */
+  function chatInUse(root) {
+    if (has(root, LIVE_CHAT_EXPANDED)) return true;
+    const frame = doc.querySelector(LIVE_CHAT);
+    return Boolean(frame && frame.getBoundingClientRect().height > 0);
+  }
+
+  /**
    * What YouTube has said about the Comments, read from the region itself.
    *
    * Every Watch Page renders the Comments region, and YouTube builds its
@@ -273,7 +379,7 @@ export function createAdapter(doc, { splitter } = {}) {
         isTheater: has(root, THEATER),
         // Fullscreen has no reliable attribute; the document knows.
         isFullscreen: Boolean(doc.fullscreenElement),
-        hasLiveChat: Boolean(doc.querySelector(LIVE_CHAT)),
+        hasLiveChat: chatInUse(root),
         hasOpenPanel:
           Boolean(doc.querySelector(OPEN_PANEL)) ||
           DOCKING_PANEL_MODES.some((mode) => has(root, mode)),
@@ -358,6 +464,9 @@ export function createAdapter(doc, { splitter } = {}) {
 
     doc.documentElement.dataset.ysc = 'on';
     delete doc.documentElement.dataset.yscReason;
+    // In the same frame the Pane appears in, so the way out is never a beat
+    // behind the layout it is a way out of.
+    followOff();
     setPaneWidth(decision.paneWidth);
     followPaneHeight();
     // Immediate rather than debounced: this is the one width change nobody is
@@ -486,6 +595,13 @@ export function createAdapter(doc, { splitter } = {}) {
     doc.getElementById(STRIP_ID)?.remove();
     doc.getElementById(PANE_ID)?.remove();
     splitter?.remove();
+    // The off control lives inside YouTube's comments header, so removing the
+    // Pane does not take it with it: it is taken out here, explicitly, or a page
+    // we stepped aside from would carry it in the header forever.
+    toggle?.remove();
+    offWatch?.disconnect();
+    offWatch = null;
+    watchedOff = null;
     paneWatch?.disconnect();
     paneWatch = null;
     doc.documentElement.style.removeProperty('--ysc-pane-width');

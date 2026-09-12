@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>YouTube Side Comments</title>
+    <style>
+      :root { color-scheme: light dark; }
+      body {
+        width: 250px;
+        margin: 0;
+        padding: 14px;
+        font: 13px/1.5 Roboto, Arial, sans-serif;
+        color: #0f0f0f;
+        background: #fff;
+      }
+      h1 { margin: 0 0 6px; font-size: 14px; font-weight: 500; }
+      p { margin: 0 0 8px; }
+      #ysc-reason { color: #606060; }
+      #ysc-enable {
+        font: inherit;
+        padding: 6px 12px;
+        border: 1px solid #065fd4;
+        border-radius: 18px;
+        background: none;
+        color: #065fd4;
+        cursor: pointer;
+      }
+      #ysc-enable:hover { background: rgba(6, 95, 212, 0.1); }
+      @media (prefers-color-scheme: dark) {
+        body { color: #f1f1f1; background: #282828; }
+        #ysc-reason { color: #aaa; }
+        #ysc-enable { border-color: #3ea6ff; color: #3ea6ff; }
+        #ysc-enable:hover { background: rgba(62, 166, 255, 0.1); }
+      }
+    </style>
+  </head>
+  <body>
+    <h1>YouTube Side Comments</h1>
+    <p id="ysc-status">Reading the page…</p>
+    <p id="ysc-reason" hidden></p>
+    <button id="ysc-enable" type="button" hidden>Turn side comments back on</button>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

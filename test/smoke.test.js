@@ -785,6 +785,67 @@ describe('Comment Pane on a real Watch Page', { skip: SKIP }, () => {
     await reapply();
   });
 
+  test('a live chat Steps Aside only while one is actually in the rail', async () => {
+    // The measured state of a past stream whose chat replay was never opened: a
+    // frame that is present, `collapsed`, `hide-chat-frame`, and drawn nowhere —
+    // 0×0, `display: none`, with `#chat-container` holding nothing. It cost the
+    // Comment Pane until this was read properly, and it must not.
+    const idle = await page.eval(`(() => {
+      const frame = document.createElement('ytd-live-chat-frame');
+      frame.id = 'chat';
+      frame.setAttribute('collapsed', '');
+      frame.setAttribute('hide-chat-frame', '');
+      frame.style.display = 'none';
+      document.querySelector('#chat-container').append(frame);
+      window.dispatchEvent(new CustomEvent('yt-navigate-finish'));
+      const box = frame.getBoundingClientRect();
+      const root = document.documentElement;
+      return { box: [Math.round(box.width), Math.round(box.height)],
+        applied: root.dataset.ysc ?? null, reason: root.dataset.yscReason ?? null,
+        pane: !!document.querySelector('#ysc-pane #comments') };
+    })()`);
+    assert.deepEqual(idle.box, [0, 0], 'the frame under test is not the hidden one it is meant to be');
+    assert.equal(idle.applied, 'on', 'a chat frame YouTube was not showing cost the Comment Pane');
+    assert.equal(idle.reason, null, `the extension Stepped Aside over a chat nobody can see: ${idle.reason}`);
+    assert.equal(idle.pane, true, 'the Comments are not in the Comment Pane');
+
+    // The same frame shown and filling the rail: that is a chat in use, and the
+    // Comment Pane gets out of its way exactly as it always has.
+    await page.eval(`(() => {
+      const frame = document.getElementById('chat');
+      frame.removeAttribute('collapsed');
+      frame.removeAttribute('hide-chat-frame');
+      frame.style.display = 'flex';
+      frame.style.height = '800px';
+      window.dispatchEvent(new CustomEvent('yt-navigate-finish'));
+      return true;
+    })()`);
+    await stepAside('live-chat');
+
+    // And YouTube's own statement of it on the root, with no frame in the page
+    // at all — which is the signal a live stream carries.
+    await page.eval(`(() => {
+      document.getElementById('chat').remove();
+      document.querySelector('[is-two-columns_]').setAttribute('live-chat-present-and-expanded', '');
+      window.dispatchEvent(new CustomEvent('yt-navigate-finish'));
+      return true;
+    })()`);
+    await stepAside('live-chat');
+
+    // Collapsing the chat is YouTube's own act, and nothing is dispatched here:
+    // the flag is watched, so the Comment Pane comes back on the flag alone.
+    await page.eval(
+      `document.querySelector('[live-chat-present-and-expanded]')
+        .removeAttribute('live-chat-present-and-expanded')`,
+    );
+    await page.waitFor(`document.documentElement.dataset.ysc === 'on'`, 'the Comment Pane to come back', 15_000);
+    assert.equal(
+      await page.eval(`!!document.querySelector('#ysc-pane #comments')`),
+      true,
+      'the Comments did not come back to the Comment Pane when the chat went away',
+    );
+  });
+
   test('a fullscreen document Steps Aside', async () => {
     // Fullscreen has no attribute to read, so this one is entered for real: a
     // click for the user activation the browser demands, then the request.
@@ -1310,9 +1371,18 @@ describe('Comment Pane on a real Watch Page', { skip: SKIP }, () => {
       `the Comment Pane is not beside the Player (${at})`,
     );
     assert.equal(r.relatedOutsideStrip, 0, `the related videos are somewhere other than the Strip (${at})`);
+    // Eleven of ours on an arranged page: the three containers — the Comment
+    // Pane, the Recommendation Strip and the Splitter — and the status control,
+    // which is a wrapper holding a button and the panel that button opens, with
+    // five lines inside that panel. The control sits inside YouTube's own
+    // comments header, so it is taken out by hand when the layout is undone;
+    // what this number catches is anything that *accumulates* as the layout is
+    // torn down and re-applied. The residue count in `stepAside` above is the
+    // stricter of the two: it counts everything of ours at any depth, and
+    // requires none.
     assert.deepEqual(
       r.counts,
-      { pane: 1, strip: 1, splitter: 1, comments: 1, ours: 3 },
+      { pane: 1, strip: 1, splitter: 1, comments: 1, ours: 11 },
       `the page accumulated residue (${at})`,
     );
     assert.equal(r.overflow, 0, `the page scrolls sideways by ${r.overflow}px (${at}) — ${JSON.stringify(r.offenders)}`);
@@ -1828,6 +1898,317 @@ describe('Comment Pane on a real Watch Page', { skip: SKIP }, () => {
       await page.eval(`document.documentElement.dataset.yscReason`),
       'unrecognised-structure',
     );
+  });
+
+  // --------------------------------------------- The off switch, and the way back
+
+  /**
+   * The toolbar surface, opened as a tab of its own with the Watch Page still
+   * the window's active one — which is what Chrome's own popup bubble would be,
+   * and which cannot be opened over CDP. Everything else is the real surface:
+   * the real `src/popup.html`, reading the real page behind it.
+   */
+  const openSurface = async () => {
+    const surface = await newPage(browser, 'about:blank');
+    await page.send('Page.bringToFront');
+    await surface.send('Page.navigate', {
+      url: `chrome-extension://${browser.extensionId}/src/popup.html`,
+    });
+    await surface.waitFor(
+      `!!document.documentElement.dataset.yscState`,
+      'the toolbar surface to read the page behind it',
+      20_000,
+    );
+    return surface;
+  };
+
+  /** What the surface says, and what it offers to do about it. */
+  const surfaceSays = (surface) =>
+    surface.eval(`(() => ({
+      state: document.documentElement.dataset.yscState ?? null,
+      reason: document.documentElement.dataset.yscReason ?? null,
+      canEnable: !document.getElementById('ysc-enable').hidden,
+      said: document.getElementById('ysc-reason').textContent.trim(),
+    }))()`);
+
+  /** A key a button acts on. Enter carries its own character, which is what the
+   *  browser's own button activation waits for — and what the arrow keys the
+   *  Splitter takes have no use for. */
+  const pressEnter = async (p = page) => {
+    const key = {
+      key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13,
+      text: '\r', unmodifiedText: '\r',
+    };
+    for (const type of ['keyDown', 'keyUp']) await p.send('Input.dispatchKeyEvent', { type, ...key });
+  };
+
+  /** The way out of the layout as a reader takes it: the status control in the
+   *  Comments' header, then the action in the panel it opens. */
+  const turnOff = async () => {
+    await clickIn(page, '#ysc-status-button');
+    await page.waitFor(
+      `!!document.getElementById('ysc-status-panel')?.matches(':popover-open')`,
+      'the status panel to open',
+      5000,
+    );
+    await clickIn(page, '#ysc-off');
+  };
+
+  /** A real click, by pointer, on an element that has a box — in whichever page
+   *  it is in. */
+  const clickIn = async (p, selector) => {
+    const spot = await p.eval(`(() => {
+      const e = document.querySelector(${JSON.stringify(selector)});
+      e.scrollIntoView({ block: 'center', behavior: 'instant' });
+      const b = e.getBoundingClientRect();
+      return { x: Math.round(b.left + b.width / 2), y: Math.round(b.top + b.height / 2) };
+    })()`);
+    for (const type of ['mousePressed', 'mouseReleased']) {
+      await p.send('Input.dispatchMouseEvent', {
+        type, ...spot, button: 'left', buttons: type === 'mousePressed' ? 1 : 0, clickCount: 1,
+      });
+    }
+  };
+
+  test('the Pane turns the layout off in place, and the toolbar surface brings it back', async () => {
+    await startFromKnownVideo();
+
+    // The control, as a reader finds it: in the Comment Pane, in YouTube's own
+    // comments header beside the sort control, and no bigger than the row that
+    // is already there — the layout may not cost the page a strip of its own.
+    const control = await page.eval(`(() => {
+      const pane = document.getElementById('ysc-pane');
+      const header = pane?.querySelector('ytd-comments-header-renderer');
+      const section = header?.querySelector('#additional-section');
+      const row = section?.parentElement ?? header?.firstElementChild;
+      const sort = header?.querySelector('yt-sort-filter-sub-menu-renderer');
+      const handle = document.getElementById('ysc-status');
+      const button = handle?.querySelector('button');
+      const height = (e) => (e ? +e.getBoundingClientRect().height.toFixed(1) : null);
+      button?.focus();
+      const focused = document.activeElement === button;
+      const withOurs = { row: height(row), header: height(header) };
+      // Taken out and put straight back, which is the whole trick: what the row
+      // costs without the control is the height the page had before it.
+      const home = handle?.parentElement;
+      const next = handle?.nextSibling;
+      handle?.remove();
+      const without = { row: height(row), header: height(header) };
+      home?.insertBefore(handle, next);
+      button?.focus();
+      const box = button?.getBoundingClientRect();
+      return {
+        inPane: !!pane && !!handle && pane.contains(handle),
+        inHeader: !!handle && !!header && header.contains(handle),
+        besideSort: !!handle && !!sort &&
+          !!(sort.compareDocumentPosition(handle) & Node.DOCUMENT_POSITION_FOLLOWING),
+        inRow: !!handle && !!row && row.contains(handle),
+        tag: button?.tagName ?? null,
+        label: button?.getAttribute('aria-label') ?? null,
+        focusable: button?.tabIndex === 0,
+        focused,
+        size: [Math.round(box?.width ?? 0), Math.round(box?.height ?? 0)],
+        icon: height(button?.querySelector('svg')),
+        // Closed, and so costing the row nothing at all.
+        panelShut: !document.getElementById('ysc-status-panel')?.matches(':popover-open'),
+        withOurs, without,
+      };
+    })()`);
+    assert.equal(control.inPane, true, 'the control is not in the Comment Pane');
+    assert.equal(control.inHeader, true, "the control is not in YouTube's own comments header");
+    assert.equal(control.inRow, true, 'the control is not in the header row itself');
+    assert.equal(control.besideSort, true, 'the control is not beside the sort control');
+    assert.equal(control.tag, 'BUTTON', 'the control is not a button');
+    assert.ok(/side comments/i.test(control.label ?? ''), `the control is not labelled: ${control.label}`);
+    assert.equal(control.focusable, true, 'the control cannot take focus');
+    assert.equal(control.focused, true, 'the control did not take focus');
+    assert.deepEqual(control.size, [24, 24], `the control is ${control.size} where the row beside it is 24px`);
+    assert.equal(control.icon, 24, 'the control does not carry a 24px icon');
+    assert.equal(control.panelShut, true, 'the status panel is open before anybody asked for it');
+    assert.equal(
+      control.withOurs.row, control.without.row,
+      `the control makes the comments header row ${control.withOurs.row}px where the page had ${control.without.row}px`,
+    );
+    assert.equal(
+      control.withOurs.header, control.without.header,
+      `the control makes the comments header ${control.withOurs.header}px where the page had ${control.without.header}px`,
+    );
+
+    // YouTube rebuilds that header on its own account — the count arrives, the
+    // sort menu is re-rendered, the whole row is replaced — and anything inside
+    // it goes with the rebuild. The control is dropped here the way a rebuild
+    // drops it, and has to come back on its own.
+    const back = await page.eval(`(async () => {
+      const handle = document.getElementById('ysc-status');
+      const home = handle.parentElement;
+      handle.remove();
+      await new Promise((r) => setTimeout(r, 500));
+      const there = document.getElementById('ysc-status');
+      return {
+        back: !!there,
+        inTheSameRow: !!there && there.parentElement === home,
+        copies: document.querySelectorAll('#ysc-status').length,
+      };
+    })()`, { awaitPromise: true });
+    assert.deepEqual(
+      back,
+      { back: true, inTheSameRow: true, copies: 1 },
+      'the control did not come back after the comments header dropped it',
+    );
+
+    // Opened and used from the keyboard, on the focus the read above took: what
+    // a reader who tabbed here does, rather than what a script can do to them.
+    await page.eval(`document.getElementById('ysc-status-button').focus()`);
+    await pressEnter();
+    const panel = await page.eval(`(() => {
+      const el = document.getElementById('ysc-status-panel');
+      const box = el?.getBoundingClientRect();
+      return {
+        open: !!el?.matches(':popover-open'),
+        state: el?.dataset.yscState ?? null,
+        reason: el?.dataset.yscReason ?? null,
+        said: document.getElementById('ysc-status-said').textContent.trim(),
+        width: document.getElementById('ysc-status-width').textContent.trim(),
+        hint: document.getElementById('ysc-status-hint').textContent.trim(),
+        offersOff: !document.getElementById('ysc-off').hidden,
+        // Placed where it can be read: in the window, over the Pane it belongs
+        // to rather than clipped by it.
+        inWindow: !!box && box.left >= 0 && box.right <= innerWidth + 1 &&
+          box.top >= 0 && box.bottom <= innerHeight + 1,
+        // Open and costing the row nothing, which is what a panel floating
+        // above the page is for.
+        row: +document.querySelector('#ysc-pane ytd-comments-header-renderer #additional-section')
+          .parentElement.getBoundingClientRect().height.toFixed(1),
+      };
+    })()`);
+    assert.equal(panel.open, true, 'the keyboard did not open the status panel');
+    assert.equal(panel.state, 'applied', `the status panel reads the page as ${panel.state}`);
+    assert.equal(panel.reason, null, 'the status panel reports a reason the engine did not record');
+    assert.ok(/side comments are on/i.test(panel.said), `the status panel says ${JSON.stringify(panel.said)}`);
+    assert.ok(/Comment Pane: \d+px/.test(panel.width), `the status panel does not say the Pane's width: ${panel.width}`);
+    assert.ok(/toolbar/i.test(panel.hint), 'the status panel does not say where a reason is readable with no Pane');
+    assert.equal(panel.offersOff, true, 'the status panel offers no way out of the layout');
+    assert.equal(panel.inWindow, true, 'the status panel was placed outside the window');
+    assert.equal(
+      panel.row, control.withOurs.row,
+      `the open status panel makes the comments header row ${panel.row}px where it was ${control.withOurs.row}px`,
+    );
+
+    await page.eval(`document.getElementById('ysc-off').focus()`);
+    await pressEnter();
+    // Ticket 02's standard, verbatim: not a container missing, but a page that
+    // is the Native Layout exactly — the Comments back at their original parent
+    // and position, the related videos back in the rail's own single column, and
+    // nothing of ours anywhere on the page.
+    await stepAside('disabled');
+
+    const surface = await openSurface();
+    try {
+      const off = await surfaceSays(surface);
+      assert.equal(off.state, 'off', 'the toolbar surface does not read the page as switched off');
+      assert.equal(off.reason, 'disabled', `the surface reports ${off.reason}, not the reason the engine recorded`);
+      assert.equal(off.canEnable, true, 'the toolbar surface offers no way back');
+      assert.ok(off.said.length > 0, 'the toolbar surface says nothing about why');
+
+      // The same document throughout: the layout comes back by re-arranging,
+      // not by a reload.
+      await page.eval(`window.__here = true`);
+      await clickIn(surface, '#ysc-enable');
+      await page.waitFor(`document.documentElement.dataset.ysc === 'on'`, 'the layout to come back', 20_000);
+      assert.equal(await page.eval(`window.__here === true`), true, 'the page reloaded rather than re-arranging');
+      const back = await arrangement();
+      assertArranged(back, 'brought back through the toolbar surface');
+      assert.ok(back.threads > 0, 'the Comments did not load into the Comment Pane again');
+    } finally {
+      surface.close();
+      await page.send('Page.bringToFront');
+    }
+  });
+
+  test('a page loaded while the layout is off comes up in the Native Layout', async () => {
+    await startFromKnownVideo();
+    await turnOff();
+    await stepAside('disabled');
+
+    // A cold document with the preference already stored. Reading it before the
+    // first decision is what is under test here, and `__paneSeen` is what proves
+    // it: a layout applied and taken back would leave it true.
+    await page.send('Page.reload');
+    await page.waitFor(`!!document.querySelector('#primary')`, 'the Watch Page to load again', 60_000);
+    await stepAside('disabled');
+    const seen = await page.eval(
+      `({ paneSeen: window.__paneSeen, reason: document.documentElement.dataset.yscReason })`,
+    );
+    assert.equal(seen.reason, 'disabled', 'a page loaded while the layout was off was not left in the Native Layout');
+    assert.equal(seen.paneSeen, false, 'the layout was applied and undone rather than never applied at all');
+
+    const surface = await openSurface();
+    try {
+      await clickIn(surface, '#ysc-enable');
+      await page.waitFor(`document.documentElement.dataset.ysc === 'on'`, 'the layout to come back', 20_000);
+    } finally {
+      surface.close();
+      await page.send('Page.bringToFront');
+    }
+  });
+
+  test('the toolbar surface reports the reason where there is no Pane, including one nobody asked for', async () => {
+    await startFromKnownVideo();
+    // An automatic Step Aside with no Comment Pane anywhere: YouTube's own
+    // single column, reached by narrowing the window rather than by any toggle.
+    await page.send('Emulation.setDeviceMetricsOverride', {
+      width: 700, height: 900, deviceScaleFactor: 1, mobile: false,
+    });
+    await page.waitFor(
+      `document.documentElement.dataset.yscReason === 'single-column'`,
+      'the automatic Step Aside',
+      15_000,
+    );
+
+    const surface = await openSurface();
+    try {
+      const said = await surfaceSays(surface);
+      const recorded = await page.eval(`document.documentElement.dataset.yscReason`);
+      assert.equal(said.reason, recorded, `the surface reports ${said.reason} where the page recorded ${recorded}`);
+      assert.equal(said.state, 'stepped-aside', 'the surface does not read an automatic Step Aside as one');
+      assert.equal(said.canEnable, false, 'the surface offers to turn on what the page itself refused');
+      assert.ok(said.said.length > 0, 'no reason is visible on a page with no Comment Pane');
+
+      // And a second one, of the kind that is a property of the page rather than
+      // of a moment: theater mode persists across loads, so it is forced here
+      // exactly as YouTube delivers it.
+      await page.eval(`(() => {
+        document.querySelector('#primary').closest('[is-two-columns_],[is-single-column]')
+          .setAttribute('theater', '');
+        window.dispatchEvent(new CustomEvent('yt-navigate-finish'));
+        return true;
+      })()`);
+      await page.waitFor(
+        `document.documentElement.dataset.yscReason === 'theater'`,
+        'the theater Step Aside',
+        15_000,
+      );
+      await surface.send('Page.reload');
+      await surface.waitFor(
+        `!!document.documentElement.dataset.yscState`,
+        'the surface to read the page again',
+        20_000,
+      );
+      const theater = await surfaceSays(surface);
+      assert.equal(
+        theater.reason,
+        'theater',
+        `the surface reports ${theater.reason} where the page recorded theater`,
+      );
+      assert.ok(theater.said.length > 0, 'no reason is visible for a theater-mode page');
+      await page.eval(`document.querySelector('[theater]').removeAttribute('theater')`);
+    } finally {
+      surface.close();
+      await page.send('Page.bringToFront');
+    }
+
+    await page.send('Emulation.clearDeviceMetricsOverride');
+    await page.waitFor(`document.documentElement.dataset.ysc === 'on'`, 'the layout to come back', 15_000);
   });
 
   // Last, because it makes theater mode stick: YouTube persists it once it has

@@ -11,10 +11,15 @@
       "run_at": "document_idle"
     }
   ],
-  "permissions": ["storage"],
+  "action": {
+    "default_title": "YouTube Side Comments",
+    "default_popup": "src/popup.html"
+  },
+  "permissions": ["storage", "scripting"],
+  "host_permissions": ["https://www.youtube.com/*"],
   "web_accessible_resources": [
     {
-      "resources": ["src/engine.js", "src/adapter.js", "src/splitter.js"],
+      "resources": ["src/engine.js", "src/words.js", "src/adapter.js", "src/splitter.js", "src/toggle.js"],
       "matches": ["https://www.youtube.com/*"]
     }
   ]

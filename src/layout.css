@@ -46,6 +46,93 @@ html[data-ysc='on'] #ysc-pane {
   border-bottom: 1px solid var(--yt-spec-10-percent-layer, rgba(128, 128, 128, 0.4));
 }
 
+/* The control, in YouTube's own comments header — the row carrying the count
+   and the sort control — rather than in a bar of ours. It is sized to that row
+   exactly: the sort control beside it is 24px tall and `#additional-section` is
+   24px, so the control costs the header no height at all, which is the whole
+   point of sitting in the row. */
+html[data-ysc='on'] #ysc-status {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  margin-left: 8px;
+}
+html[data-ysc='on'] #ysc-status-button {
+  box-sizing: border-box;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: none;
+  color: var(--yt-spec-text-primary, #0f0f0f);
+  cursor: pointer;
+}
+html[data-ysc='on'] #ysc-status-button svg {
+  display: block;
+  width: 24px;
+  height: 24px;
+  fill: currentColor;
+  pointer-events: none;
+}
+/* The hover and focus treatments YouTube gives its own icon buttons on this
+   row: the same faint disc, the same hairline outline. Focus is drawn inside
+   the control's own box, so the row it sits in does not move for it. */
+html[data-ysc='on'] #ysc-status-button:hover {
+  background: var(--yt-spec-10-percent-layer, rgba(128, 128, 128, 0.2));
+}
+html[data-ysc='on'] #ysc-status-button:focus-visible {
+  outline: 2px solid var(--yt-spec-text-primary, #0f0f0f);
+  outline-offset: -2px;
+}
+
+/* The panel the control opens: what the extension is doing on this page, and
+   the way out of it. It is a popover, so it is rendered in the top layer —
+   above the Pane it belongs to and outside the clipping of a box that scrolls,
+   which a panel drawn inside the header could not be. Its `display` is the
+   browser's, deliberately: a closed popover is `display: none` by the user
+   agent's own rule, and an author `display` here would leave it open forever. */
+html[data-ysc='on'] #ysc-status-panel {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  box-sizing: border-box;
+  width: 244px;
+  padding: 12px 4px 10px 16px;
+  border: none;
+  border-radius: 12px;
+  background: var(--yt-spec-raised-background, #fff);
+  color: var(--yt-spec-text-primary, #0f0f0f);
+  box-shadow: 0 4px 32px rgba(0, 0, 0, 0.2);
+  font: 400 13px/18px Roboto, Arial, sans-serif;
+}
+html[data-ysc='on'] #ysc-status-panel p {
+  margin: 0 12px 6px 0;
+}
+html[data-ysc='on'] #ysc-status-panel #ysc-status-why,
+html[data-ysc='on'] #ysc-status-panel #ysc-status-width,
+html[data-ysc='on'] #ysc-status-panel #ysc-status-hint {
+  color: var(--yt-spec-text-secondary, #606060);
+  font-size: 12px;
+}
+html[data-ysc='on'] #ysc-status-panel #ysc-off {
+  margin: 2px 0 8px;
+  padding: 6px 12px;
+  border: none;
+  border-radius: 18px;
+  background: none;
+  color: var(--yt-spec-call-to-action, #065fd4);
+  font: inherit;
+  cursor: pointer;
+}
+html[data-ysc='on'] #ysc-status-panel #ysc-off:hover {
+  background: var(--yt-spec-10-percent-layer, rgba(128, 128, 128, 0.2));
+}
+html[data-ysc='on'] #ysc-status-panel #ysc-off:focus-visible {
+  outline: 2px solid var(--yt-spec-call-to-action, #065fd4);
+  outline-offset: -2px;
+}
+
 /* The Splitter is the gutter between the columns, so it costs the Player and
    the Pane no width between them; it is as tall as the Pane it resizes. */
 html[data-ysc='on'] #secondary-inner {

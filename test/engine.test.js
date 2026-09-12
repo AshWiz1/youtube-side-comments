@@ -6,15 +6,19 @@ import {
   resolvePaneWidth,
   resolvePaneHeight,
   paneCeiling,
+  surfaceFor,
   ACTION,
   REASON,
   PLACE,
+  SURFACE,
   COMMENTS_STATE,
   DEFAULT_PANE_WIDTH,
   MIN_PANE_WIDTH,
   MIN_PLAYER_WIDTH,
   MIN_TWO_COLUMN_VIEWPORT,
 } from '../src/engine.js';
+// What the two surfaces say, held against the engine's own vocabulary below.
+import { STATUS, WHY, ELSEWHERE_HINT } from '../src/words.js';
 
 /** An ordinary desktop Watch Page: two columns by YouTube's own signal, and its
  *  comment section built and holding Comments. */
@@ -113,6 +117,15 @@ for (const [name, s, reason] of firsts) {
     assert.equal(decide(state(s)).reason, reason);
   });
 }
+
+// The off switch is outranked by nothing, and the table above is the whole list
+// of things it has to outrank — so each trigger is asked again with the switch
+// off rather than a second list being written down and drifting.
+test('the off switch outranks every trigger, not just the first', () => {
+  for (const [name, s] of triggers) {
+    assert.equal(decide(state({ ...s, prefs: { enabled: false } })).reason, REASON.DISABLED, name);
+  }
+});
 
 // [what the page already has, the decision for it, whether it is arranged
 // again]. The decisions are made rather than written down, so the comparison is
@@ -261,6 +274,82 @@ for (const [{ reach, available }, height] of heights) {
     assert.equal(resolvePaneHeight({ reach, available }), height);
   });
 }
+
+// The toolbar surface's whole answer, from what the page recorded. [what the
+// surface is told, what it says].
+const surfaces = [
+  ['a page with the Pane on it', { applied: true }, { state: SURFACE.APPLIED, reason: null, canEnable: false }],
+  // The layout is on the page, so the Pane is what the reader is looking at,
+  // whatever the store or a stale reason says.
+  ['a page that carries both markers', { applied: true, reason: REASON.THEATER, enabled: false },
+    { state: SURFACE.APPLIED, reason: null, canEnable: false }],
+  // The off switch: the one thing the surface can undo.
+  ['the switch turned off, and the page says so', { reason: REASON.DISABLED },
+    { state: SURFACE.OFF, reason: REASON.DISABLED, canEnable: true }],
+  ['the switch turned off, on a page that has not decided yet', { enabled: false },
+    { state: SURFACE.OFF, reason: REASON.DISABLED, canEnable: true }],
+  // An automatic Step Aside: reported, and nothing to undo — turning the layout
+  // "on" over a theater-mode page would be turning on nothing.
+  ['an automatic Step Aside', { reason: REASON.THEATER },
+    { state: SURFACE.STEPPED_ASIDE, reason: REASON.THEATER, canEnable: false }],
+  ['another one', { reason: REASON.COMMENTS_DISABLED },
+    { state: SURFACE.STEPPED_ASIDE, reason: REASON.COMMENTS_DISABLED, canEnable: false }],
+  ['a page that is not a Watch Page', { reason: REASON.NOT_WATCH_PAGE },
+    { state: SURFACE.STEPPED_ASIDE, reason: REASON.NOT_WATCH_PAGE, canEnable: false }],
+  // A page that has said nothing: no markers of ours, or a reason that is not
+  // ours to report.
+  ['a page the extension never spoke for', {}, { state: SURFACE.ELSEWHERE, reason: null, canEnable: false }],
+  ['a reason this engine never recorded', { reason: 'someone-elses-reason' },
+    { state: SURFACE.ELSEWHERE, reason: null, canEnable: false }],
+  ['a reason that is not a string', { reason: 42 }, { state: SURFACE.ELSEWHERE, reason: null, canEnable: false }],
+  ['an unknown reason while the switch is off', { enabled: false, reason: 'someone-elses-reason' },
+    { state: SURFACE.OFF, reason: REASON.DISABLED, canEnable: true }],
+];
+for (const [name, told, said] of surfaces) {
+  test(`the toolbar surface on ${name}`, () => {
+    assert.deepEqual(surfaceFor(told), said);
+  });
+}
+
+test('the toolbar surface reads a page that has said nothing at all', () => {
+  assert.deepEqual(surfaceFor(), { state: SURFACE.ELSEWHERE, reason: null, canEnable: false });
+});
+
+// A reason the surface cannot report is a reason nobody is told about, so every
+// identifier the engine can record is held to being one it hands back — the off
+// switch excepted, which it reports as the decision rather than as the store.
+test('every reason the engine records is one the surface reports', () => {
+  for (const reason of Object.values(REASON)) {
+    const said = surfaceFor({ reason });
+    assert.ok(
+      said.reason === reason || (reason === REASON.DISABLED && said.state === SURFACE.OFF),
+      `${reason} came back as ${JSON.stringify(said)}`,
+    );
+  }
+});
+
+// The popup renders these states, so renaming one is a user-visible change.
+test('surface states are stable', () => {
+  assert.deepEqual(SURFACE, {
+    APPLIED: 'applied',
+    OFF: 'off',
+    STEPPED_ASIDE: 'stepped-aside',
+    ELSEWHERE: 'elsewhere',
+  });
+});
+
+// Both surfaces render these, and a reason with no sentence is a reason nobody
+// is told about — so the tables are held against the engine's own vocabulary
+// rather than against a second list that could fall behind it.
+test('everything the engine can decide has something said about it', () => {
+  for (const reason of Object.values(REASON)) {
+    assert.equal(typeof WHY[reason], 'string', `nothing is said about ${reason}`);
+  }
+  for (const state of Object.values(SURFACE)) {
+    assert.equal(typeof STATUS[state], 'string', `nothing is said about ${state}`);
+  }
+  assert.ok(ELSEWHERE_HINT.length > 0, 'the status view has nothing to say about a page with no Pane');
+});
 
 // The popup renders these strings, so renaming one is a user-visible change.
 test('reason strings are stable', () => {

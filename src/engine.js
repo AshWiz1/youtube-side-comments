@@ -36,6 +36,23 @@ export const REASON = {
 };
 
 /**
+ * What the toolbar surface is looking at, from what the page records about
+ * itself. The surface's whole job is to be the way back from the off switch, so
+ * what it says is a decision, and it belongs here rather than in the popup's own
+ * conditionals.
+ */
+export const SURFACE = {
+  /** The Comment Pane is on the page. */
+  APPLIED: 'applied',
+  /** The user's own off switch is what is keeping the layout off. */
+  OFF: 'off',
+  /** The layout is on, and the page was refused anyway, for the reason below. */
+  STEPPED_ASIDE: 'stepped-aside',
+  /** Nothing of ours has spoken for this page, so there is nothing to report. */
+  ELSEWHERE: 'elsewhere',
+};
+
+/**
  * What YouTube has said about the Comments on the page in front of us.
  *
  * YouTube renders the Comments region on **every** Watch Page and builds its
@@ -174,6 +191,44 @@ export function decide({ viewport, page, prefs }) {
 }
 
 /**
+ * What the toolbar surface says about the page behind it.
+ *
+ * This is the **only** way the surface learns anything, and it is fed from what
+ * the page records — `data-ysc` for an applied layout and `data-ysc-reason` for
+ * the engine's most recent decision — so the reason it reports is the one the
+ * engine actually recorded, an automatic Step Aside the user never triggered
+ * included. A page carrying an identifier this engine does not know — an older
+ * version's, or another extension's — reports nothing rather than something
+ * wrong, which is what "never reports a reason the engine did not record" costs
+ * in code: one membership test.
+ *
+ * The off switch is the one thing the surface can undo, because it is the one
+ * thing the in-page control can do. Everything else the engine refuses — theater
+ * mode, a single column, comments turned off — is a fact about the page, and
+ * offering to turn the layout "on" over it would be offering nothing.
+ *
+ * @param {object} state
+ * @param {boolean} state.enabled   The stored preference.
+ * @param {boolean} state.applied   Whether the page carries an arrangement.
+ * @param {string|null} state.reason  What the page recorded, if anything.
+ * @returns {{state: string, reason: string|null, canEnable: boolean}}
+ */
+export function surfaceFor({ enabled = true, applied = false, reason = null } = {}) {
+  // An arrangement on the page is the one thing that outranks the preference
+  // here as it does in `decide`: whatever the store says, the Pane is what the
+  // reader is looking at.
+  if (applied) return { state: SURFACE.APPLIED, reason: null, canEnable: false };
+  const recorded = isReason(reason) ? reason : null;
+  if (!enabled || recorded === REASON.DISABLED) {
+    // Reported as the engine's own identifier rather than as the preference:
+    // the surface says what was decided, not what was stored.
+    return { state: SURFACE.OFF, reason: REASON.DISABLED, canEnable: true };
+  }
+  if (recorded) return { state: SURFACE.STEPPED_ASIDE, reason: recorded, canEnable: false };
+  return { state: SURFACE.ELSEWHERE, reason: null, canEnable: false };
+}
+
+/**
  * Whether a decision asks for anything the page does not already have, given
  * the decision the arrangement standing on it was made from.
  *
@@ -280,6 +335,11 @@ export function resolvePaneHeight({ reach, available }) {
  *  carries neither of YouTube's column markers. */
 function columnSignalKnown(page) {
   return page.isSingleColumn === true || page.isSingleColumn === false;
+}
+
+/** Whether a string is one of the engine's own reason identifiers. */
+function isReason(value) {
+  return typeof value === 'string' && Object.values(REASON).includes(value);
 }
 
 function stepAside(reason) {
