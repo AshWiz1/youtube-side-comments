@@ -14,3 +14,9 @@
 - [ ] A drag follows the pointer at the display's refresh rate rather than the page's reflow rate — or the cost is shown not to be the Splitter's to pay.
 - [ ] Where the `container − player minimum` term sets the ceiling, the Player's column stays at or above the measured-safe width.
 - [ ] No regression in the drag, clamp, keyboard, reset or persistence behaviour ticket 03 verified, including its real-pointer-input smoke tests.
+
+## Comments
+
+**A finding from ticket 11 that belongs here.** Measured while fixing the Comment Pane's height: the Pane does not actually stick. `#secondary-inner` is exactly as tall as the Pane, so `position: sticky` has no travel — at scroll offsets 0 / 300 / 1200 the Pane's top tracks the Player's exactly (68 → −232 → −1132).
+
+The Pane therefore behaves as a fixed-height column rather than a pinned one: scrolling the *page* takes it away, and only the Pane's own scrollbar keeps the Comments readable. That is survivable while the Pane fills the window, which is now most of the time, but it is why the viewport cap's stated benefit cannot currently arise — and it is the same problem as the Splitter parting company with the Pane on scroll, already in this ticket. Fixing stickiness would fix both.

@@ -4,6 +4,7 @@ import {
   decide,
   needsArranging,
   resolvePaneWidth,
+  resolvePaneHeight,
   paneCeiling,
   ACTION,
   REASON,
@@ -221,6 +222,45 @@ test('the second term is exactly the viewport the layout needs', () => {
   assert.equal(paneCeiling(MIN_TWO_COLUMN_VIEWPORT), MIN_PANE_WIDTH);
   assert.equal(MIN_TWO_COLUMN_VIEWPORT, MIN_PANE_WIDTH + MIN_PLAYER_WIDTH);
 });
+
+// [how tall the Pane must be to end on the Strip, the viewport below its sticky
+// top, the height it takes]. An ordinary window is 1080px tall under a 56px
+// masthead, so 1024px is what there is to spend.
+const heights = [
+  // A description that fits: the Pane ends on the Strip, and the gap beside the
+  // description is gone.
+  [{ reach: 900, available: 1024 }, 900],
+  [{ reach: 1023, available: 1024 }, 1023],
+  [{ reach: 1024, available: 1024 }, 1024],
+  // A description taller than the window: the window wins, so the end of the
+  // thread stays above the fold.
+  [{ reach: 1025, available: 1024 }, 1024],
+  [{ reach: 4000, available: 1024 }, 1024],
+  // A fraction of a pixel is a pixel: the Adapter writes a length, not a ratio.
+  [{ reach: 1064.4, available: 1544 }, 1064],
+  [{ reach: 1064.6, available: 1544 }, 1065],
+  // A measurement that is missing constrains nothing; the other still does.
+  [{ reach: null, available: 1024 }, 1024],
+  [{ reach: undefined, available: 1024 }, 1024],
+  [{ reach: 900, available: null }, 900],
+  [{ reach: 4000, available: undefined }, 4000],
+  // A Strip above the Pane, a window of nothing, a measurement that came back
+  // as a word: none of them is a height, and none of them is a height of zero.
+  [{ reach: 0, available: 1024 }, 1024],
+  [{ reach: -20, available: 1024 }, 1024],
+  [{ reach: NaN, available: 1024 }, 1024],
+  [{ reach: 900, available: 0 }, 900],
+  [{ reach: 900, available: -1 }, 900],
+  // Nothing measured at all: the stylesheet's own default stands rather than a
+  // height invented here.
+  [{ reach: null, available: null }, null],
+  [{ reach: NaN, available: NaN }, null],
+];
+for (const [{ reach, available }, height] of heights) {
+  test(`pane height: ${reach} to the Strip in ${available} -> ${height}`, () => {
+    assert.equal(resolvePaneHeight({ reach, available }), height);
+  });
+}
 
 // The popup renders these strings, so renaming one is a user-visible change.
 test('reason strings are stable', () => {

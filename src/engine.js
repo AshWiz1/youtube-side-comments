@@ -248,6 +248,34 @@ export function paneCeiling(container) {
   );
 }
 
+/**
+ * How tall the Comment Pane may be: as tall as it takes to reach the
+ * Recommendation Strip, and no taller than the viewport allows.
+ *
+ * The two cannot both hold on a page whose description is longer than the
+ * window, and the viewport is the one that wins. The Pane is sticky so the
+ * Comments stay readable while the page scrolls, which puts its top at the
+ * masthead and its bottom on the fold; a Pane taller than that runs the end of
+ * the thread — and the Pane's own bottom edge, which is the only thing saying
+ * where the Comments stop — off the bottom of the window, which is the whole
+ * reason the Pane sticks at all. So a page whose description fits gets a Pane
+ * that ends on the Strip, with no dead space beside the description, and a page
+ * whose description does not gets exactly as much of one as there is room for.
+ *
+ * A measurement that is missing — no Strip on the page yet, a viewport that
+ * cannot say how tall it is — constrains nothing. Both missing is nothing to
+ * say, which is `null`: the stylesheet's own default stands rather than a
+ * height invented here.
+ *
+ * @param {number} reach      The height at which the Pane ends on the Strip.
+ * @param {number} available  The viewport below the Pane's sticky top.
+ * @returns {number|null} The Pane's height in pixels.
+ */
+export function resolvePaneHeight({ reach, available }) {
+  const measured = [reach, available].filter(usable);
+  return measured.length ? Math.round(Math.min(...measured)) : null;
+}
+
 /** `isSingleColumn` is tri-state: true, false, or unknown (`null`) when the page
  *  carries neither of YouTube's column markers. */
 function columnSignalKnown(page) {

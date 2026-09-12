@@ -338,13 +338,6 @@ describe('Comment Pane on a real Watch Page', { skip: SKIP }, () => {
     })()`);
 
     assert.ok(r.pane && r.player, 'the Player or the Comment Pane is missing');
-    // The Pane shares the Player's height, not the rail's: the rail runs ~120px
-    // taller than the video, which would leave the Pane longer than the Player
-    // it sits beside.
-    assert.ok(
-      Math.abs(r.pane.height - r.player.height) <= 2,
-      `the Comment Pane is ${r.pane.height}px tall beside a ${r.player.height}px Player`,
-    );
     assert.ok(
       r.pane.left >= r.player.right,
       `the Comment Pane overlaps the Player by ${(r.player.right - r.pane.left).toFixed(1)}px`,
@@ -353,6 +346,93 @@ describe('Comment Pane on a real Watch Page', { skip: SKIP }, () => {
     assert.ok(
       Math.abs(r.pane.top - r.player.top) < 2,
       `the Comment Pane is not beside the Player (top ${r.pane.top} vs ${r.player.top})`,
+    );
+  });
+
+  /** The Pane's box and the two numbers its height is made of, read in one
+   *  frame: how far it is to the Recommendation Strip, and what the window
+   *  allows below the Pane's own sticky top. */
+  const paneHeight = () => page.eval(`(() => {
+    const box = (e) => { if (!e) return null; const b = e.getBoundingClientRect();
+      return { top: +b.top.toFixed(1), bottom: +b.bottom.toFixed(1), height: +b.height.toFixed(1) }; };
+    const pane = document.querySelector('#ysc-pane');
+    const rail = document.querySelector('#secondary-inner');
+    const strip = document.getElementById('ysc-strip');
+    const sticky = parseFloat(getComputedStyle(pane).top) || 0;
+    return {
+      pane: box(pane), strip: box(strip),
+      // Measured from the columns' top, which is where the Pane begins before
+      // it is stuck, exactly as the Adapter measures it.
+      reach: +(box(strip).top - box(rail).top).toFixed(1),
+      available: document.documentElement.clientHeight - sticky,
+      viewport: document.documentElement.clientHeight,
+      // The Pane's own bottom edge, and whether it is drawn: where the Comments
+      // end is not otherwise visible on a page whose surface it shares.
+      edge: [
+        getComputedStyle(pane).borderBottomWidth,
+        getComputedStyle(pane).borderBottomColor,
+        getComputedStyle(pane).boxSizing,
+      ],
+    };
+  })()`);
+
+  test('the Comment Pane is never taller than the window, and stops there when it must', async () => {
+    const r = await paneHeight();
+    assert.ok(r.pane && r.strip, 'the Comment Pane or the Recommendation Strip is missing');
+    // The rule, measured rather than restated: as tall as it takes to reach the
+    // Strip, or as much as the window has room for, whichever is less.
+    assert.ok(
+      Math.abs(r.pane.height - Math.min(r.reach, r.available)) <= 2,
+      `the Comment Pane is ${r.pane.height}px tall, where the Strip needs ${r.reach}px and the window allows ${r.available}px`,
+    );
+    // And what the cap buys: the Pane's sticky top holds it under the masthead,
+    // so the end of the thread is never past the fold.
+    assert.ok(
+      r.pane.height <= r.viewport,
+      `the Comment Pane is ${r.pane.height}px tall in a ${r.viewport}px window`,
+    );
+    assert.ok(
+      r.pane.height <= r.available + 1,
+      `the Comment Pane is ${r.pane.height}px tall with ${r.available}px below its sticky top`,
+    );
+    // Legible, and without costing the Pane a pixel of the height it was given.
+    assert.deepEqual(r.edge, ['1px', 'rgba(128, 128, 128, 0.4)', 'border-box'], 'the Pane has no bottom edge');
+  });
+
+  test('the Comment Pane reaches the Recommendation Strip where the description fits', async () => {
+    // The one page state in which the two halves of the rule can be told apart:
+    // a window tall enough that reaching the Strip is not also too tall to show.
+    // The width is left exactly as it is, so the page re-lays out no differently
+    // — only the room below it changes.
+    const { viewport } = await paneHeight();
+    await page.send('Emulation.setDeviceMetricsOverride', {
+      width: await page.eval('innerWidth'), height: 1400, deviceScaleFactor: 1, mobile: false,
+    });
+    await page.waitFor(
+      `(() => { const p = document.querySelector('#ysc-pane');
+        return !!p && p.getBoundingClientRect().height > ${viewport}; })()`,
+      'the Comment Pane to take the room the taller window gives it',
+      15_000,
+    );
+    const r = await paneHeight();
+    // The precondition, read rather than assumed: the description fits now, so
+    // an unmoved Pane would be the layout rather than the cap.
+    assert.ok(
+      r.reach <= r.available + 1,
+      `the page still does not fit — the Strip needs ${r.reach}px of a ${r.available}px window`,
+    );
+    assert.ok(
+      Math.abs(r.pane.bottom - r.strip.top) <= 2,
+      `the Comment Pane ends at ${r.pane.bottom} where the Recommendation Strip begins at ${r.strip.top}` +
+        ` — ${(r.strip.top - r.pane.bottom).toFixed(1)}px of dead space beside the description`,
+    );
+
+    await page.send('Emulation.clearDeviceMetricsOverride');
+    await page.waitFor(
+      `(() => { const p = document.querySelector('#ysc-pane');
+        return !!p && p.getBoundingClientRect().height < ${r.pane.height - 1}; })()`,
+      'the Comment Pane to come back to the window it had',
+      15_000,
     );
   });
 
@@ -707,11 +787,14 @@ describe('Comment Pane on a real Watch Page', { skip: SKIP }, () => {
         label: h.getAttribute('aria-label'),
         focusable: h.tabIndex === 0,
         focused: document.activeElement === h,
+        // The boundary the Splitter divides is the Comment Pane's own edge, so
+        // that is where its box ends — and it begins clear of the Player, so the
+        // whole of it lies in the gutter rather than over either column.
         separatorBetween:
-          Math.abs(centre - pane.getBoundingClientRect().left) <= 1 &&
-          centre >= document.querySelector('#player').getBoundingClientRect().right - 1,
-        // Hit-testable exactly where it is drawn: a straddling divider that no
-        // pointer event can reach is a divider nobody can drag.
+          Math.abs(b.right - pane.getBoundingClientRect().left) <= 1 &&
+          b.left >= document.querySelector('#player').getBoundingClientRect().right - 1,
+        // Hit-testable exactly where it is drawn: a divider that no pointer
+        // event can reach is a divider nobody can drag.
         hittable: document.elementFromPoint(centre, b.top + 20) === h,
         height: +b.height.toFixed(1),
         paneHeight: +pane.getBoundingClientRect().height.toFixed(1),
@@ -731,6 +814,102 @@ describe('Comment Pane on a real Watch Page', { skip: SKIP }, () => {
       Math.abs(r.height - r.paneHeight) <= 1,
       `the Splitter is ${r.height}px tall beside a ${r.paneHeight}px Comment Pane`,
     );
+  });
+
+  /** What the Splitter is drawn on, what it is drawn as, and what a pointer
+   *  finds on the Comments' own left edge. */
+  const splitterChrome = () => page.eval(`(() => {
+    const box = (e) => { const b = e.getBoundingClientRect();
+      return { left: +b.left.toFixed(1), right: +b.right.toFixed(1), top: +b.top.toFixed(1), bottom: +b.bottom.toFixed(1), width: +b.width.toFixed(1) }; };
+    const splitter = document.getElementById('ysc-splitter');
+    const comments = document.querySelector('#comments');
+    const css = (e, p, ps) => getComputedStyle(e, ps).getPropertyValue(p);
+    const s = box(splitter), c = box(comments);
+    return {
+      splitter: s, comments: c, player: box(document.querySelector('#player')),
+      band: css(splitter, 'background-color'),
+      mark: css(splitter, 'background-color', '::after'),
+      markWidth: css(splitter, 'width', '::after'),
+      cursor: css(splitter, 'cursor'),
+      // What a reader's pointer finds one pixel inside the Comments' left edge:
+      // the Splitter may not be the thing sitting on the first pixels of the
+      // thread — on that row, or on any of the rows it could reach.
+      atEdge: (() => { const e = document.elementFromPoint(c.left + 1, c.top + 40);
+        return e ? (e.id || e.tagName.toLowerCase()) : null; })(),
+      overComments: (() => {
+        const last = Math.min(s.bottom, c.bottom) - 2;
+        for (let y = Math.max(s.top, c.top) + 2; y < last; y += 32) {
+          if (document.elementFromPoint(c.left + 1, y) === splitter) return y;
+        }
+        return null;
+      })(),
+    };
+  })()`);
+
+  test('the Splitter covers no part of the Comments', async () => {
+    const r = await splitterChrome();
+    assert.ok(r.splitter && r.comments, 'the Splitter or the Comments is missing');
+    // Measured against the Comments' own box, which is the Pane's whole width:
+    // the Splitter ends where the Comments begin.
+    assert.ok(
+      r.splitter.right <= r.comments.left + 0.5,
+      `the Splitter reaches ${r.splitter.right}, ${(r.splitter.right - r.comments.left).toFixed(1)}px into the Comments at ${r.comments.left}`,
+    );
+    // And it is in the gutter rather than over the Player either — the whole
+    // width of it is space neither column was using.
+    assert.ok(
+      r.splitter.left >= r.player.right - 0.5,
+      `the Splitter starts at ${r.splitter.left}, inside the Player which ends at ${r.player.right}`,
+    );
+    assert.equal(r.overComments, null, 'the Splitter is the element on top of the Comments');
+    assert.notEqual(r.atEdge, 'ysc-splitter', 'the first pixel of the Comments belongs to the Splitter');
+    assert.equal(r.cursor, 'col-resize', 'nothing on the boundary says it can be dragged');
+  });
+
+  test('the Splitter is invisible at rest and apparent when hovered or focused', async () => {
+    // Whatever the test before this one left the pointer and the focus on.
+    await page.eval(`document.activeElement?.blur()`);
+    await page.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 60, y: 400 });
+    const rest = await splitterChrome();
+    assert.deepEqual(
+      [rest.band, rest.mark],
+      ['rgba(0, 0, 0, 0)', 'rgba(0, 0, 0, 0)'],
+      'the Splitter is drawn on the boundary at rest',
+    );
+
+    // A real pointer, resting on it — and nowhere near the boundary at rest, so
+    // what is measured is the Splitter's own hover state.
+    await page.send('Input.dispatchMouseEvent', {
+      type: 'mouseMoved',
+      x: Math.round(rest.splitter.left + rest.splitter.width / 2),
+      y: Math.round(rest.splitter.top + 200),
+    });
+    const hovered = await splitterChrome();
+    // A hairline rather than a block, and thin enough to read as the seam
+    // between the Player and the Pane rather than as chrome stood on it.
+    assert.equal(hovered.markWidth, '2px', 'the Splitter did not show a hairline on hover');
+    assert.notEqual(hovered.mark, 'rgba(0, 0, 0, 0)', 'hovering the Splitter shows nothing');
+
+    // The reader's own way there: tab backwards out of the Comments, which is
+    // what comes before the Splitter in the page's own order. Focus a reader
+    // arrives at this way is keyboard focus by definition, where a script
+    // `focus()` is not — the Splitter has no pointer resting on the boundary to
+    // say where they are.
+    await page.eval(`document.getElementById('ysc-pane')
+      .querySelector('a[href], button, input, textarea, [tabindex]:not([tabindex="-1"])')?.focus()`);
+    const tab = { type: 'rawKeyDown', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9, modifiers: 8 };
+    await page.send('Input.dispatchKeyEvent', tab);
+    await page.send('Input.dispatchKeyEvent', { ...tab, type: 'keyUp' });
+    const focused = await page.eval(`(() => {
+      const s = document.getElementById('ysc-splitter');
+      const css = (p, ps) => getComputedStyle(s, ps).getPropertyValue(p);
+      return { active: document.activeElement?.id ?? null, visible: s.matches(':focus-visible'),
+        mark: css('background-color', '::after'), band: css('background-color') };
+    })()`);
+    assert.equal(focused.active, 'ysc-splitter', 'Shift+Tab out of the Comments did not reach the Splitter');
+    assert.equal(focused.visible, true, 'the Splitter has no keyboard focus state of its own');
+    assert.notEqual(focused.band, 'rgba(0, 0, 0, 0)', 'focusing the Splitter leaves it invisible');
+    assert.notEqual(focused.mark, hovered.mark, 'focusing the Splitter looks the same as hovering it');
   });
 
   test('dragging the Splitter resizes the Comment Pane and the Player keeps up', async () => {

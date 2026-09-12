@@ -11,6 +11,8 @@
  * applied and records why. Nothing here decides; it only reads and obeys.
  */
 
+import { resolvePaneHeight } from './engine.js';
+
 const ACTION_APPLY = 'apply';
 const PANE_ID = 'ysc-pane';
 const STRIP_ID = 'ysc-strip';
@@ -91,9 +93,6 @@ const LIVE_CHAT = '#chat-container ytd-live-chat-frame';
 const MODE_FLAGS = [THEATER, TWO_COLUMNS, SINGLE_COLUMN, ...DOCKING_PANEL_MODES];
 const WATCH_ROOT = MODE_FLAGS.map((flag) => `[${flag}]`).join(',');
 
-/** The Player's frame — the box the Comment Pane shares its height with. */
-const PLAYER = '#player';
-
 /**
  * @param {Document} doc
  * @param {{splitter?: HTMLElement}} [deps]  The Splitter's element, which this
@@ -116,8 +115,9 @@ export function createAdapter(doc, { splitter } = {}) {
   /** The width currently on the Pane, so the Splitter can start a gesture from
    *  what is actually on screen rather than from what it last asked for. */
   let appliedWidth = 0;
-  /** The Player's box, watched so the Pane can follow its height. */
-  let playerWatch = null;
+  /** The boxes the Pane's height is measured from, watched so that a page that
+   *  moves under the Pane is answered with a new height. */
+  let paneWatch = null;
   /** One Player resync per frame, however many widths a drag passes through. */
   let resyncQueued = false;
   /** The watch root the mode observer is on, so that it is re-pointed at a new
@@ -359,7 +359,7 @@ export function createAdapter(doc, { splitter } = {}) {
     doc.documentElement.dataset.ysc = 'on';
     delete doc.documentElement.dataset.yscReason;
     setPaneWidth(decision.paneWidth);
-    followPlayerHeight();
+    followPaneHeight();
     // Immediate rather than debounced: this is the one width change nobody is
     // dragging through, and a page that has just been arranged is the one moment
     // the Player has certainly not been resynced by YouTube itself.
@@ -388,22 +388,75 @@ export function createAdapter(doc, { splitter } = {}) {
   }
 
   /**
-   * The Comment Pane shares the Player's height rather than the rail's, which
-   * runs ~120px taller — the rail's own height leaves the Pane longer than the
-   * video it sits beside. The Player's height follows its width, so watching its
-   * box also re-measures after every width change without anyone having to
-   * remember to.
+   * How far the Pane's sticky top holds it from the window's top, read back
+   * from the stylesheet rather than restated here, so that changing the CSS
+   * cannot leave this measuring against an offset the Pane does not use. `auto`
+   * — a Pane that is not sticky, before the layout is on — is no offset at all.
    */
-  function followPlayerHeight() {
-    const player = doc.querySelector(PLAYER);
-    if (!player || !doc.defaultView.ResizeObserver) return;
-    playerWatch ??= new doc.defaultView.ResizeObserver(() => {
-      // Re-read rather than close over: YouTube replaces its watch-page roots
-      // between videos, and a remembered element would be a detached one.
-      const box = doc.querySelector(PLAYER)?.getBoundingClientRect();
-      if (box) doc.documentElement.style.setProperty('--ysc-pane-height', `${box.height}px`);
+  function stickyTop() {
+    const pane = doc.getElementById(PANE_ID);
+    const top = pane ? parseFloat(doc.defaultView.getComputedStyle(pane).top) : NaN;
+    return Number.isFinite(top) ? top : 0;
+  }
+
+  /**
+   * One measurement of the Pane's height, from the page as it stands.
+   *
+   * Both numbers are lengths on the page and both are read in the same frame.
+   * The top of the columns is taken from the rail rather than from the Pane,
+   * because the Pane is sticky: once it is stuck its own box reports where it
+   * is pinned, and the height that reaches the Strip is measured from where the
+   * Pane begins rather than from where it has been held.
+   *
+   * The Strip is the far end of the same measurement rather than an input to
+   * it: a Strip that has not been laid out has no box, and a difference taken
+   * from one would be a height of nothing.
+   */
+  function measurePaneHeight() {
+    if (doc.documentElement.dataset.ysc !== 'on') return;
+    const page = locate();
+    const strip = doc.getElementById(STRIP_ID);
+    if (!page || !strip) return;
+    const columnsTop = page.rail.getBoundingClientRect().top;
+    const stripTop = strip.getBoundingClientRect().top;
+    const height = resolvePaneHeight({
+      reach: stripTop > columnsTop ? stripTop - columnsTop : null,
+      available: doc.documentElement.clientHeight - stickyTop(),
     });
-    playerWatch.observe(player);
+    if (height !== null) {
+      doc.documentElement.style.setProperty('--ysc-pane-height', `${height}px`);
+    }
+  }
+
+  /**
+   * Keep the Pane's height in step with the page it is drawn on.
+   *
+   * Watched rather than timed, because everything the height is made of moves
+   * on YouTube's own account: the Player's column grows and shrinks with the
+   * width the Splitter is dragging, the description expands when a reader asks
+   * it to, and the Strip arrives with the related videos. The Player's own box
+   * is not watched: it is inside its column, so a Player that moves has moved
+   * the column with it.
+   *
+   * A window resize moves no column, so nothing watched resizes with it and the
+   * viewport's own half of the rule has to be re-read by hand. The Adapter's own
+   * resize — the one it dispatches to resync the Player — is not the window
+   * changing, and is ignored for the same reason the bootstrap ignores it.
+   */
+  function followPaneHeight() {
+    measurePaneHeight();
+    const win = doc.defaultView;
+    if (!win.ResizeObserver) return;
+    if (!paneWatch) {
+      paneWatch = new win.ResizeObserver(() => measurePaneHeight());
+      win.addEventListener('resize', (event) => {
+        if (!event.ysc) measurePaneHeight();
+      });
+    }
+    const page = locate();
+    const strip = doc.getElementById(STRIP_ID);
+    if (page) paneWatch.observe(page.primary);
+    if (strip) paneWatch.observe(strip);
   }
 
   /**
@@ -433,8 +486,8 @@ export function createAdapter(doc, { splitter } = {}) {
     doc.getElementById(STRIP_ID)?.remove();
     doc.getElementById(PANE_ID)?.remove();
     splitter?.remove();
-    playerWatch?.disconnect();
-    playerWatch = null;
+    paneWatch?.disconnect();
+    paneWatch = null;
     doc.documentElement.style.removeProperty('--ysc-pane-width');
     doc.documentElement.style.removeProperty('--ysc-pane-height');
     delete doc.documentElement.dataset.ysc;

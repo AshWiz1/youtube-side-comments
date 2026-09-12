@@ -2,9 +2,14 @@
    Native Layout is a single deletion rather than an unwinding. */
 :root {
   --ysc-pane-width: 402px;
-  /* The Pane shares the Player's height, which the Adapter measures and
-     overrides this with. Until it has, the viewport is the best guess. */
-  --ysc-pane-height: calc(100vh - var(--ytd-watch-flexy-masthead-height, 56px));
+  /* The most the Pane may ever be: the window, less the masthead its sticky top
+     holds it under, so the end of the thread — and the Pane's own bottom edge —
+     is never past the fold. */
+  --ysc-pane-limit: calc(100vh - var(--ytd-watch-flexy-masthead-height, 56px));
+  /* The Pane's height is measured from the page — how far it is to the
+     Recommendation Strip, capped at the limit above — and the Adapter overrides
+     this with the measurement. Until it has, the limit is the best guess. */
+  --ysc-pane-height: var(--ysc-pane-limit);
 }
 
 #ysc-pane {
@@ -27,34 +32,68 @@ html[data-ysc='on'] #movie_player {
   min-width: 0 !important;
 }
 
-/* The Pane keeps its own scroll so reading the thread never moves the Player. */
+/* The Pane keeps its own scroll so reading the thread never moves the Player.
+   Its height is the Adapter's measurement, re-capped here against the window so
+   that a viewport which changed a moment ago is answered before the next
+   measurement lands. The border is inside that height rather than added to it,
+   so the bottom edge says where the Comments stop without moving them. */
 html[data-ysc='on'] #ysc-pane {
   position: sticky;
   top: var(--ytd-watch-flexy-masthead-height, 56px);
-  max-height: var(--ysc-pane-height);
+  box-sizing: border-box;
+  max-height: min(var(--ysc-pane-height), var(--ysc-pane-limit));
   overflow-y: auto;
+  border-bottom: 1px solid var(--yt-spec-10-percent-layer, rgba(128, 128, 128, 0.4));
 }
 
-/* The Splitter straddles the boundary, so it costs the Player and the Pane no
-   width between them; it is as tall as the Pane it resizes. */
+/* The Splitter is the gutter between the columns, so it costs the Player and
+   the Pane no width between them; it is as tall as the Pane it resizes. */
 html[data-ysc='on'] #secondary-inner {
   position: relative;
 }
+/* In the gap and no wider than it, so nothing under the Splitter is a control
+   a reader cannot reach: the Comments' own left edge is the Pane's, and a grab
+   area reaching into the Pane is the first few pixels of the thread taken away
+   from whoever is trying to read it. The gutter is 16px and this is 12 of it,
+   which is a comfortable target to grab without covering either column. */
 html[data-ysc='on'] #ysc-splitter {
   position: absolute;
   top: 0;
-  left: -5px;
-  width: 10px;
+  left: -12px;
+  width: 12px;
   height: var(--ysc-pane-height);
   z-index: 60;
   cursor: col-resize;
   /* Without this a touch drag arrives as a scroll and never becomes a gesture. */
   touch-action: none;
+  /* Nothing at rest. The boundary between the Player and the Comment Pane is
+     not a thing that needs announcing, and a strip of grey standing on it reads
+     as chrome the page never had. */
+  background: none;
 }
-html[data-ysc='on'] #ysc-splitter:hover,
+/* The mark that says the Splitter is there, drawn inside its own box at the
+   Pane's edge: a hairline a reader can find, a dozen pixels they can grab. */
+html[data-ysc='on'] #ysc-splitter::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  width: 2px;
+  background: none;
+}
+html[data-ysc='on'] #ysc-splitter:hover::after {
+  background: var(--yt-spec-10-percent-layer, rgba(128, 128, 128, 0.4));
+}
+/* Keyboard focus has to be unmistakable, so it is the hairline and the whole
+   grab area behind it, brightened — a reader who tabbed here has no pointer
+   resting on the boundary to tell them where they are. */
 html[data-ysc='on'] #ysc-splitter:focus-visible {
-  background: var(--yt-spec-10-percent-layer, rgba(128, 128, 128, 0.25));
   outline: none;
+  background: var(--yt-spec-10-percent-layer, rgba(128, 128, 128, 0.2));
+}
+html[data-ysc='on'] #ysc-splitter:focus-visible::after {
+  background: var(--yt-spec-text-secondary, rgba(96, 96, 96, 0.9));
 }
 
 /* The Recommendation Strip: the related videos, out of the rail and full width
@@ -68,7 +107,11 @@ html[data-ysc='on'] #ysc-strip {
      which is a few pixels wider than the card itself, has somewhere to go
      instead of pushing the page sideways. */
   padding-inline: 16px;
-  margin-top: 24px;
+  /* The space between the columns and the first row of cards, as padding rather
+     than as a margin: the Strip then *starts* where the columns end, so the
+     Pane measuring down to it measures to the same place the columns do, and
+     the height a page needs is not one the Pane can add to by existing. */
+  padding-top: 24px;
 }
 
 /* YouTube measures the list and its wrapper against the rail they were born in.
