@@ -105,6 +105,18 @@
     // build is the answer this decision waits for. An observer hears it whenever
     // it lands; the asking above only lasts as long as its window does.
     adapter.observeComments(() => run());
+    // And the related list, for the reason the Comments region is followed:
+    // YouTube builds it in its own time, and which of the two arrives first is a
+    // race — measured, the Comments can be ready while the list is not. A page
+    // arranged then carries the Comments in the Pane, the list still in the rail
+    // and an empty Strip, and the decision after it is the same decision, so
+    // nothing would re-apply: the arrangement standing on the page was made
+    // without the list, and a list that has since arrived is not the one it was
+    // made with. Forgetting it is what lets the next decision land.
+    adapter.observeRelated(() => {
+      last = null;
+      run();
+    });
     // YouTube builds a Watch Page asynchronously, so a run that lands before
     // the Comments exist is *early*, not unrecognised. Retrying that one reason
     // keeps a slow load from Stepping Aside on a page that was merely young.

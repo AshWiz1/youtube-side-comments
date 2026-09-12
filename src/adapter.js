@@ -44,6 +44,15 @@ const RELATED = '#related';
  */
 const PLAYER = '#player';
 
+/**
+ * The Player's column and the rail's own box — the two elements the layout is
+ * made of, since the Comments go into the rail and the Recommendation Strip goes
+ * after the box that holds both columns. They are read as a **pair**; see
+ * `locate`.
+ */
+const PRIMARY = '#primary';
+const RAIL = '#secondary-inner';
+
 /** YouTube's own mode flags, all carried by the watch root. */
 const THEATER = 'theater';
 const TWO_COLUMNS = 'is-two-columns_';
@@ -190,6 +199,12 @@ export function createAdapter(doc, { splitter, toggle } = {}) {
    *  and the header inside it, and the control has to follow them. */
   let watchedOff = null;
   let offWatch = null;
+  /** The rail the related list's observer is on, and the related list it has
+   *  already seen, so that a run is asked for when the list arrives or is
+   *  replaced — and for nothing else the rail does. */
+  let watchedRail = null;
+  let watchedRelated = null;
+  let relatedWatch = null;
 
   /**
    * Locate the Watch Page by structure and identifiers rather than by
@@ -198,10 +213,30 @@ export function createAdapter(doc, { splitter, toggle } = {}) {
    * identical internals, so matching on the familiar tag alone would silently
    * no-op for anyone in an experiment. The columns and the right rail are the
    * shape this extension actually depends on.
+   *
+   * They are found as a **pair**, because a document can hold two pages at once.
+   * Measured, 2026-09-12, arriving at a Watch Page in-page from a search results
+   * page: the page being left stays in the document — its own `#primary` inside
+   * `ytd-search`, stamped `hidden`, 0×0 — beside the arriving Watch Page's. Taken
+   * one at a time, the first `#primary` in the document is the *outgoing* page's
+   * and the rail is the *arriving* page's, so the two do not belong to one page:
+   * the Comments went into the live rail and were visible, while the Strip was
+   * placed after the dead page's columns — 0×0, holding `#related` and every
+   * tile, and never seen again. That is the report exactly: the Comment Pane
+   * present and the recommendations not there below the video.
+   *
+   * So the pair is decided by the relationship the layout itself is made of —
+   * the Strip goes after the box holding both columns, which makes the wanted
+   * `#primary` the one whose box also holds the rail's column. A page whose two
+   * do not hang together that way is read as it was before, the first of each:
+   * this narrows nothing, and no page is left unarranged by it.
    */
   function locate() {
-    const primary = doc.querySelector('#primary');
-    const rail = doc.querySelector('#secondary-inner');
+    const primaries = [...doc.querySelectorAll(PRIMARY)];
+    const rails = [...doc.querySelectorAll(RAIL)];
+    const sharesABox = (primary, rail) => Boolean(primary?.parentElement?.contains(rail));
+    const primary = primaries.find((p) => rails.some((r) => sharesABox(p, r))) ?? primaries[0];
+    const rail = rails.find((r) => sharesABox(primary, r)) ?? rails[0];
     return primary && rail ? { primary, rail } : null;
   }
 
@@ -279,6 +314,46 @@ export function createAdapter(doc, { splitter, toggle } = {}) {
     const watch = { attributes: true, attributeFilter: [DISABLE_UPGRADE], childList: true };
     commentsWatch.observe(comments, watch);
     if (container) commentsWatch.observe(container, watch);
+    return true;
+  }
+
+  /**
+   * Call back the moment a related list arrives in the rail — or is replaced by
+   * another, which is how YouTube serves the next video's.
+   *
+   * Watched rather than timed, for the reason the Comments region is: YouTube
+   * builds the related list in its own time and the two do not arrive together.
+   * Measured on the arrival route, the Comments can be ready while the list is
+   * not — and a page arranged then has the Comments in the Pane, the list still
+   * in the rail, and an empty Strip, with nothing to re-apply when the list
+   * lands: the decision was taken, nothing about it moves afterwards, and
+   * `needsArranging` says so. Measured the other way round as well — on the same
+   * route the list was there at 3.1s while the Comments region was still
+   * YouTube's placeholder — so which comes first is a race, not an order, and no
+   * clock can be tuned to it.
+   *
+   * The rail is watched rather than the page, and the list's *identity* rather
+   * than the rail's every change: the Comments are moved into the rail and the
+   * Pane lives in it, so a busy rail mutates constantly, and only a different
+   * `#related` is news.
+   */
+  function observeRelated(onChange) {
+    const rail = locate()?.rail;
+    if (!rail) return false;
+    if (rail !== watchedRail) {
+      relatedWatch?.disconnect();
+      watchedRail = rail;
+      // Whatever is in the rail now has already been read by a decision; only
+      // what arrives after this is an arrival.
+      watchedRelated = doc.querySelector(RELATED);
+      relatedWatch = new MutationObserver(() => {
+        const related = doc.querySelector(RELATED);
+        if (related === watchedRelated) return;
+        watchedRelated = related;
+        if (related) onChange();
+      });
+      relatedWatch.observe(rail, { childList: true, subtree: true });
+    }
     return true;
   }
 
@@ -700,6 +775,7 @@ export function createAdapter(doc, { splitter, toggle } = {}) {
     revert,
     observeModes,
     observeComments,
+    observeRelated,
     setPaneWidth,
     /** The width the Pane is actually at, which is what a gesture starts from. */
     paneWidth: () => appliedWidth,
