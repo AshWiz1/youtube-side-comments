@@ -701,18 +701,111 @@ describe('Comment Pane on a real Watch Page', { skip: SKIP }, () => {
 
     if (r.shorts) {
       assert.equal(r.hiddenShorts, 0, 'a Short in the Strip was hidden rather than laid out');
-      // A Short is a card like its neighbours: the same column, the same tile,
-      // its thumbnail the same 16:9 box — cropped, as YouTube crops one wherever
-      // it shows a Short in a 16:9 slot, rather than stretched to a row's height.
+      // A Short is a card like its neighbours: the same column, the same tile.
       assert.ok(
         Math.abs(r.short.width - r.card.width) <= 1 && r.short.height > 300,
         `a Short is ${r.short.width}×${r.short.height} against a ${r.card.width}×${r.card.height} card`,
       );
-      assert.ok(
-        r.shortThumb && Math.abs(r.shortThumb.width / r.shortThumb.height - 16 / 9) < 0.06,
-        `a Short's thumbnail is ${JSON.stringify(r.shortThumb)} — not the 16:9 box its row is built from`,
-      );
+      // Its thumbnail's shape is YouTube's, whatever that is — this list serves
+      // 16:9 cards — so it is reported rather than asserted. The shape a Short
+      // *keeps* is the next test's business; asserting 16:9 here would be
+      // asserting the flattening ticket 16 deleted.
+      t.diagnostic(`a Short's thumbnail is ${JSON.stringify(r.shortThumb)} of a ${JSON.stringify(r.card)} card`);
     }
+  });
+
+  test('a Shorts shelf in the Strip keeps its own carousel, and a Short its own shape', async (t) => {
+    // The shape the report came from — a shelf of vertical Shorts, which a
+    // signed-in YouTube serves and this suite's signed-out pages do not, filed
+    // at `.scratch/comment-pane/shapes/shorts-shelf.html`. What is measured is
+    // not the markup but what the Strip does to it: a Shorts lockup and a
+    // Shorts shelf are planted inside the Strip and again outside it, in
+    // YouTube's own classes and ids, and both readings have to agree. Our
+    // stylesheet is the only difference between them, so a rule of ours that
+    // restates a Short's width or its thumbnail's shape shows up as a
+    // disagreement — and did, at 452px wide and a 16:9 thumbnail, before the
+    // rules that did it were deleted.
+    const PLANT = `(() => {
+      const mk = (tag, cls, parent) => { const n = document.createElement(tag);
+        if (cls) n.className = cls; if (parent) parent.append(n); return n; };
+      const shelf = (parent, id) => { const s = mk('ytd-reel-shelf-renderer', 'probe-shelf', parent);
+        s.id = id; s.setAttribute('hide-shelf-header', ''); return s; };
+      // A Shorts lockup in miniature: its own classes, and the width YouTube
+      // gives one inside a carousel.
+      const lockup = (parent, id) => { const wrap = mk('div', 'probe-lockup', parent); wrap.id = id;
+        wrap.style.cssText = '--ytd-shorts-width: 210px';
+        const item = mk('div', 'shortsLockupViewModelHost', wrap);
+        const holder = mk('div', 'shortsLockupViewModelHostThumbnailParentContainer', item);
+        mk('div', 'ytThumbnailViewModelHost ytThumbnailViewModelAspectRatio2By3', holder); return wrap; };
+      const grid = document.querySelector('#ysc-strip ytd-item-section-renderer > #contents')
+        || document.querySelector('#ysc-strip #items');
+      const control = mk('div', null, document.body);
+      control.id = 'probe-control';
+      control.style.cssText = 'position:fixed;left:-9999px;top:0;width:1200px;';
+      shelf(control, 'probe-shelf-out');
+      lockup(control, 'probe-lockup-out');
+      const inShelf = shelf(grid, 'probe-shelf-in');
+      lockup(grid, 'probe-lockup-in');
+      lockup(inShelf, 'probe-lockup-shelf');
+      // A card that arrives asking for the whole row. Constructed, like the rule
+      // it measures: no related list has served one.
+      const wide = mk('div', 'probe-card', grid);
+      wide.id = 'probe-wide';
+      wide.style.gridColumn = '1 / -1';
+      return true;
+    })()`;
+    await page.eval(PLANT);
+    // YouTube's own renderer builds the carousel inside the shelf it was given,
+    // which is what makes the two readings comparable.
+    await page.waitFor(
+      `!!document.querySelector('#probe-shelf-in #items') && !!document.querySelector('#probe-shelf-out #items')`,
+      'the planted shelves to build their carousels',
+      15_000,
+    );
+
+    const r = await page.eval(`(() => {
+      const shape = (sel) => { const w = document.querySelector(sel);
+        const item = w.querySelector('.shortsLockupViewModelHost');
+        const thumb = w.querySelector('.ytThumbnailViewModelAspectRatio2By3');
+        return { width: getComputedStyle(item).width, thumbnail: getComputedStyle(thumb).paddingTop }; };
+      // The shelf's own list level, as YouTube lays it out — or as we do.
+      const carousel = (sel) => { const items = document.querySelector(sel).querySelector('#items');
+        return getComputedStyle(items).display + ' / ' + getComputedStyle(items).gridTemplateColumns; };
+      const width = (sel) => +document.querySelector(sel).getBoundingClientRect().width.toFixed(1);
+      const measured = {
+        card: width('#ysc-strip yt-lockup-view-model'),
+        shelf: { width: width('#probe-shelf-in'), height: +document.querySelector('#probe-shelf-in').getBoundingClientRect().height.toFixed(1) },
+        shapeInStrip: shape('#probe-lockup-in'),
+        shapeInShelf: shape('#probe-lockup-shelf'),
+        shapeOutside: shape('#probe-lockup-out'),
+        carouselInStrip: carousel('#probe-shelf-in'),
+        carouselOutside: carousel('#probe-shelf-out'),
+        // What a card asking for the whole row is actually given.
+        askedForTheRow: getComputedStyle(document.querySelector('#probe-wide')).gridColumn,
+      };
+      // Nothing of the probes outlives the measurement.
+      for (const e of document.querySelectorAll('.probe-shelf, .probe-lockup, .probe-card, #probe-control')) e.remove();
+      return measured;
+    })()`);
+
+    t.diagnostic(`a lockup measures ${JSON.stringify(r.shapeInStrip)} inside the Strip, ${JSON.stringify(r.shapeOutside)} outside; its shelf is ${JSON.stringify(r.shelf)} against ${r.card}px columns, its carousel ${r.carouselInStrip} against ${r.carouselOutside}`);
+    // A Short's shape is its own: the same lockup measures the same on both
+    // sides of the Strip, and inside a shelf as well.
+    assert.deepEqual(r.shapeInStrip, r.shapeOutside, 'the Strip restates a Shorts lockup\'s shape');
+    assert.deepEqual(r.shapeInShelf, r.shapeOutside, 'a lockup inside a shelf is shaped differently there');
+    // And a shelf is a carousel, not a list of cards: our grid does not reach
+    // into it, so its list level is YouTube's on both sides too.
+    assert.deepEqual(r.carouselInStrip, r.carouselOutside, 'the Strip\'s grid reaches inside a Shorts shelf');
+    // Which is only possible because the shelf takes the strip's row rather
+    // than one column of it — a carousel in a column is a carousel a quarter of
+    // its width, with its items stacked down it.
+    assert.ok(
+      r.shelf.width > r.card * 2,
+      `the shelf is ${r.shelf.width}px wide, in a Strip of ${r.card}px columns`,
+    );
+    // And a card cannot take a row, however it arrives asking: this one asks for
+    // the whole row and is given a column.
+    assert.equal(r.askedForTheRow, 'auto', `a card asking for the row was given ${r.askedForTheRow}`);
   });
 
   test('theater mode Steps Aside and restores the Native Layout exactly', async () => {

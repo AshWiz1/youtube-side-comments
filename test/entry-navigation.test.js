@@ -16,7 +16,7 @@ import { after, before, describe, test } from 'node:test';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { launch, newPage } from '../test-support/cdp.mjs';
+import { launch, newPage, sleep } from '../test-support/cdp.mjs';
 
 const EXTENSION = join(dirname(fileURLToPath(import.meta.url)), '..');
 /** A non-Watch Page with video links. The signed-out home feed renders none. */
@@ -32,6 +32,12 @@ describe('arriving at a Watch Page from a page that is not one', { skip: SKIP },
     browser = await launch({ extension: EXTENSION });
     page = await newPage(browser, FROM);
     await page.waitFor(`!!document.querySelector('a[href^="/watch"]')`, 'a page of results', 60_000);
+
+    // Chrome reports an isolated world over CDP asynchronously, so asserting the
+    // moment the page is ready races the event. Wait for it here, once, rather
+    // than asserting too early and calling a slow report a missing script.
+    const until = Date.now() + 20_000;
+    while (page.worlds.length === 0 && Date.now() < until) await sleep(200);
   });
 
   after(async () => {

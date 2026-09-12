@@ -239,9 +239,14 @@ html[data-ysc='on'] #ysc-strip {
 /* YouTube measures the list and its wrapper against the rail they were born in.
    Left alone at page width they render one very wide column of cards — the
    stretched look the Strip exists to avoid — so both levels are released back
-   to the width they actually have. */
-html[data-ysc='on'] #ysc-strip #items,
-html[data-ysc='on'] #ysc-strip ytd-item-section-renderer {
+   to the width they actually have.
+
+   Everything inside a Shorts shelf is excluded — here, and in every rule below
+   that reaches a list level or a card. The shelf is a carousel, not a list of
+   cards, and anything of ours that lands inside it is a shape imposed on
+   YouTube's own layout; its own rules are further down. */
+html[data-ysc='on'] #ysc-strip #items:not(ytd-reel-shelf-renderer *),
+html[data-ysc='on'] #ysc-strip ytd-item-section-renderer:not(ytd-reel-shelf-renderer *) {
   width: auto !important;
   max-width: none !important;
 }
@@ -257,11 +262,34 @@ html[data-ysc='on'] #ysc-strip ytd-item-section-renderer {
    it four rather than a rule that says four, so a narrower viewport quietly
    drops to three and then two instead of holding a count its width cannot
    take. */
-html[data-ysc='on'] #ysc-strip ytd-item-section-renderer > #contents,
-html[data-ysc='on'] #ysc-strip #items:not(:has(> ytd-item-section-renderer)) {
+html[data-ysc='on'] #ysc-strip ytd-item-section-renderer > #contents:not(ytd-reel-shelf-renderer *),
+html[data-ysc='on'] #ysc-strip #items:not(:has(> ytd-item-section-renderer)):not(ytd-reel-shelf-renderer *) {
   display: grid !important;
   grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
   gap: 16px;
+}
+
+/* A card takes one column of that grid and no more, whatever shape YouTube
+   serves it in: a tile that arrived sized for a rail, a picture wider than its
+   column, or a container that lays its own items out — none of them can stretch
+   a row or push past the cell it was given. The rules below name the containers
+   that *do* span, so those are excluded here rather than fought with:
+   written without the exclusions this rule outranks them by specificity and
+   silently un-spans the shelf and the list's footer — measured, both computed
+   `grid-column: auto` at one 452px column, where the shelf belongs at the
+   Strip's full 1857px. `:where()` looked like the tidier answer — a rule that
+   weighs nothing cannot outrank anything — and did not weigh nothing here: in
+   the injected sheet it still beat the span, measured the same way.
+
+   Constructed rather than observed: no related list measured renders a card
+   that needed holding down. It is here because the whole shape of this fix is
+   that a shape nobody has seen cannot break the grid, and a grid whose items
+   are all one column wide is that promise in one rule. */
+html[data-ysc='on'] #ysc-strip #contents > *:not(ytd-continuation-item-renderer):not(ytd-item-section-renderer):not(ytd-reel-shelf-renderer),
+html[data-ysc='on'] #ysc-strip #items > *:not(ytd-continuation-item-renderer):not(ytd-item-section-renderer):not(ytd-reel-shelf-renderer) {
+  grid-column: auto !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
 }
 
 /* A card in the Strip is YouTube's own home-page tile: a thumbnail the width of
@@ -279,56 +307,68 @@ html[data-ysc='on'] #ysc-strip #items:not(:has(> ytd-item-section-renderer)) {
    the layout's, not a change we made to a page: it arrives with the Strip's
    attribute and leaves with it, and the continuation pages YouTube appends
    later are tiles without anything having to visit them. */
-html[data-ysc='on'] #ysc-strip yt-lockup-view-model > .ytLockupViewModelHost {
+html[data-ysc='on'] #ysc-strip yt-lockup-view-model:not(ytd-reel-shelf-renderer *) > .ytLockupViewModelHost {
   flex-direction: column !important;
 }
-html[data-ysc='on'] #ysc-strip yt-lockup-view-model > .ytLockupViewModelHost > .ytLockupViewModelContentImage {
+html[data-ysc='on'] #ysc-strip yt-lockup-view-model:not(ytd-reel-shelf-renderer *) > .ytLockupViewModelHost > .ytLockupViewModelContentImage {
   width: 100% !important;
   max-width: none !important;
   padding-right: 0 !important;
   padding-bottom: 12px !important;
   display: block !important;
 }
-html[data-ysc='on'] #ysc-strip yt-lockup-view-model > .ytLockupViewModelHost > .ytLockupViewModelMetadata {
+html[data-ysc='on'] #ysc-strip yt-lockup-view-model:not(ytd-reel-shelf-renderer *) > .ytLockupViewModelHost > .ytLockupViewModelMetadata {
   flex: 0 0 auto !important;
 }
 
-/* A Short is a card in this grid like any other, and in this list it arrives as
-   one: measured on a related list holding thirteen of them, a Short is a
-   `yt-lockup-view-model` whose link goes to `/shorts/` and whose thumbnail is
-   the same 16:9 box as its neighbours, with YouTube's own "Shorts" badge on it.
-   Nothing about it is vertical, and nothing about it needs a rule of its own —
-   the tile rules above are the whole of what makes it a card.
+/* A Short is a card in this grid like any other, and in every related list this
+   suite has been able to load it arrives as one: measured on a list holding
+   thirteen of them, a Short is a `yt-lockup-view-model` whose link goes to
+   `/shorts/` and whose thumbnail is the same 16:9 box as its neighbours, with
+   YouTube's own "Shorts" badge on it. Nothing about it is vertical, and nothing
+   about it needs a rule of its own — the tile rules above are the whole of what
+   makes it a card.
 
-   These three are for the vertical Shorts card YouTube draws elsewhere (its
-   Shorts tab: `ytm-shorts-lockup-view-model`, a 2:3 thumbnail, nearly three
-   times the height of the tiles beside it). If one is ever served in this list,
-   it is held to the Strip's own shape rather than the Strip's rows being held to
-   it — the thumbnail cropped to 16:9 as YouTube crops it everywhere else it
-   shows a Short in a 16:9 slot. The classes are YouTube's, read from its own
-   stylesheet; absent, these say nothing. */
-html[data-ysc='on'] #ysc-strip .shortsLockupViewModelHost {
-  width: 100% !important;
-}
-html[data-ysc='on'] #ysc-strip .shortsLockupViewModelHostThumbnailContainer::before,
-html[data-ysc='on'] #ysc-strip .ytThumbnailViewModelAspectRatio2By3,
-html[data-ysc='on'] #ysc-strip .ytThumbnailViewModelAspectRatio9By16,
-html[data-ysc='on'] #ysc-strip .ytThumbnailViewModelShortsAspectRatio9By16 {
-  padding-top: 56.25% !important;
-}
+   The list those measurements came from is a **signed-out** one, and the reader
+   who reported this is signed in. What their YouTube serves there is a shelf:
+   `ytd-reel-shelf-renderer`, captured from their own browser and filed at
+   `.scratch/comment-pane/shapes/shorts-shelf.html` — a carousel with its own
+   `#header`, `#contents`, a `yt-horizontal-list-renderer` holding `#items`
+   between two arrows, and inside it `ytm-shorts-lockup-view-model-v2` items
+   whose thumbnails are **2:3** (`ytThumbnailViewModelAspectRatio2By3`, padded to
+   150% by YouTube's own stylesheet). That shape is what the shelf rules below
+   are for; it has never been rendered in this harness, and is marked as such.
+
+   What was here instead — and is deleted rather than repaired — was a guard that
+   held a Short to the Strip's own 16:9 shape: `56.25%` on the very class this
+   markup carries, which is YouTube's 150% overridden by ours, i.e. a vertical
+   Short flattened into a horizontal slot. That is the first half of the report
+   ("usually short tiles are vertical but they are normal video sized"), and it
+   was written by us. A Short's proportion is its own: nothing below restates
+   the shape of a thumbnail. The width rule that stood here has gone the same
+   way — it held `.shortsLockupViewModelHost` at `100%`, where YouTube holds it
+   at `--ytd-shorts-width` (210px inside a carousel), which is a Short made as
+   wide as its container. */
 
 /* Loading the next page of related videos is the list's footer, not a card, so
-   it spans the row instead of sitting in a column of its own. A section or a
-   shelf of its own inside the list — a group of Shorts, most of all — takes the
-   row for the same reason: held to one column it would be laid out for a cell a
-   quarter of its width, and its own items would stack down it one to a row. It
-   spans, and the items inside it are laid out by the same grid as everything
-   around them. Measured at a 1889px Strip with a section placed in it: spanning,
-   its own contents take the Strip's four columns; held to a column, one. No
-   related list measured served its Shorts this way — a Short there was an
-   ordinary card — so this is a guard for a shape, not a repair of one seen. */
+   it spans the row instead of sitting in a column of its own. A section of its
+   own inside the list takes the row for the same reason: held to one column it
+   would be laid out for a cell a quarter of its width, and its own items — which
+   the grid above then lays out, being that section's list level — would stack
+   down it one to a row. Measured at a 1889px Strip with a section placed in it:
+   spanning, its own contents take the Strip's four columns; held to a column,
+   one. No related list measured served a section this way, so this half is a
+   guard for a shape rather than a repair of one seen.
+
+   The shelf spans wherever it lands, and not only as a direct child of the
+   list's `#contents`: which level YouTube nests it under is the one thing the
+   captured markup does not say, and a shelf held to a column is the second half
+   of the report — the carousel keeps a quarter of its width and its items, laid
+   out by a grid of ours at 452px, take a row each. Measured on a shelf planted
+   in the Strip: held to a column its items' level computes one 380px track. */
 html[data-ysc='on'] #ysc-strip ytd-continuation-item-renderer,
-html[data-ysc='on'] #ysc-strip #contents > :is(ytd-item-section-renderer, ytd-reel-shelf-renderer) {
+html[data-ysc='on'] #ysc-strip ytd-reel-shelf-renderer,
+html[data-ysc='on'] #ysc-strip #contents > ytd-item-section-renderer {
   grid-column: 1 / -1;
 }
 
