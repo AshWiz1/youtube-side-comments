@@ -133,10 +133,7 @@ html[data-ysc='on'] #ysc-status-panel #ysc-off:focus-visible {
   outline-offset: -2px;
 }
 
-/* The Splitter is the gutter between the columns, so it costs the Player and
-   the Pane no width between them; it is as tall as the Pane it resizes.
-
-   Filling the rail's own column is what the Pane's stickiness is made of, and
+/* Filling the rail's own column is what the Pane's stickiness is made of, and
    the rail does not fill it on its own: YouTube's `#secondary-inner` is as tall
    as what it holds, and what it holds is the Pane. A sticky box has no travel
    inside a containing block it already fills, so the Pane was not pinned at
@@ -144,12 +141,26 @@ html[data-ysc='on'] #ysc-status-panel #ysc-off:focus-visible {
    (68 → −232 → −1132). Stretched to the column, the Pane pins under the
    masthead and stays there until its bottom reaches the end of the rail, which
    is where the Recommendation Strip begins. `100%` is the rail's own column,
-   which is as tall as the Player's — the two are the same flex row. */
+   which is as tall as the Player's — the two are the same flex row.
+
+   **No `position` here, deliberately.** Ticket 03 made this box `relative` so
+   that an absolutely-positioned Splitter had a containing block; ticket 09
+   rebuilt the Splitter as a sticky **float**, and a sticky box is a positioned
+   box, so the Splitter and the mark drawn inside it (`::after`) resolve against
+   the Splitter's own box either way. Measured by neutralising the declaration
+   on a live Watch Page: every box identical — rail 1471,68,402×1168.4, Pane and
+   Splitter both 929 tall at 1459/1471 and unmoved, the mark still 2px wide
+   resolving to 0 — and the rendered page **byte-for-byte the same screenshot**.
+   It was doing nothing for us while still handing YouTube's own panels a
+   containing block we had no reason to give them, so it is gone rather than
+   left standing. */
 html[data-ysc='on'] #secondary-inner {
-  position: relative;
   min-height: 100%;
 }
-/* In the gap and no wider than it, so nothing under the Splitter is a control
+/* The Splitter is the gutter between the columns, so it costs the Player and
+   the Pane no width between them; it is as tall as the Pane it resizes.
+
+   In the gap and no wider than it, so nothing under the Splitter is a control
    a reader cannot reach: the Comments' own left edge is the Pane's, and a grab
    area reaching into the Pane is the first few pixels of the thread taken away
    from whoever is trying to read it. The gutter is 16px and this is 12 of it,

@@ -79,8 +79,7 @@ const COMMENTS_STATE = { PENDING: 'pending', NONE: 'none', READY: 'ready' };
 /**
  * Panel modes that dock **horizontally**, at the rail's own width, and so
  * genuinely compete with the Comment Pane for the same column. YouTube ships
- * them dormant behind flags; an ordinary expanded panel stacks vertically and
- * is harmless, but any of these is a collision waiting to happen.
+ * them dormant behind flags, and any of these is a collision waiting to happen.
  */
 const DOCKING_PANEL_MODES = [
   'fixed-panels',
@@ -90,8 +89,35 @@ const DOCKING_PANEL_MODES = [
   'split-scroll',
 ];
 
-/** An expanded panel occupying YouTube's own panel stack. */
-const OPEN_PANEL = '#panels [visibility="ENGAGEMENT_PANEL_VISIBILITY_EXPANDED"]';
+/**
+ * YouTube's stacks for the engagement panels that live in the rail — the
+ * transcript, the comments panel, the structured description, the ads, the
+ * search preview.
+ *
+ * All three are read because **which stack a panel lands in is YouTube's
+ * choice, not a fact about the panel**. Measured, 2026-09-12, on a Watch Page
+ * whose rail is 515px wide: `#panels` carries seven section-list renderers
+ * (every one `HIDDEN` until one is opened), and `#inline-panels` and
+ * `#persistent-panel-container` are present and empty — YouTube's own template
+ * ships `#inline-panels` with `hidden="[[!inlineEngagementPanels]]"`, a
+ * flag-gated container for the inline family of panels that is *not* the
+ * legacy stack. Reading only `#panels` is what leaves a panel opened in
+ * another stack invisible: it is in the rail, it is drawn, it is competing for
+ * the column, and nothing we watch says so.
+ *
+ * A panel opened in `#panels` takes a real box at the top of that column and
+ * pushes the related list below it — measured, the comments panel and the
+ * structured description at 515×809, the transcript at 515×825, against the
+ * rail's own 515 — which is the same column the Comment Pane is holding. The
+ * collapsed renderers the rail carries at rest are not this: only `EXPANDED`
+ * is read, so a stack full of dormant panels is silent.
+ */
+const RAIL_PANEL_STACKS = ['#panels', '#inline-panels', '#persistent-panel-container'];
+
+/** An expanded panel occupying any of YouTube's rail stacks. */
+const OPEN_PANEL = RAIL_PANEL_STACKS.map(
+  (stack) => `${stack} [visibility="ENGAGEMENT_PANEL_VISIBILITY_EXPANDED"]`,
+).join(', ');
 
 /**
  * Live chat lives at `#chat-container` inside the rail. The container is always

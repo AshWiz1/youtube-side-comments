@@ -759,10 +759,8 @@ describe('Comment Pane on a real Watch Page', { skip: SKIP }, () => {
   });
 
   test("YouTube's own panels Step Aside while they compete for the column", async () => {
-    // An ordinary expanded panel stacks vertically and takes nothing from the
-    // rail, so what is guarded against is the horizontally-docking family that
-    // sits dormant in YouTube's stylesheets — forced here, exactly as theater
-    // mode is, because a dormant flag is not reachable through YouTube's UI.
+    // Forced rather than clicked, exactly as theater mode is: the panel YouTube
+    // opens for a reader needs a signed-in page, and a fresh profile is not one.
     const expanded = await page.eval(`(() => {
       const panel = document.querySelector('#panels ytd-engagement-panel-section-list-renderer');
       if (!panel) return 'no panel in the rail';
@@ -773,8 +771,45 @@ describe('Comment Pane on a real Watch Page', { skip: SKIP }, () => {
     assert.equal(expanded, 'expanded', expanded);
     await stepAside('open-panel');
 
+    // Measured after the revert, so these are YouTube's own numbers: a panel
+    // that has been opened is the rail's own width — it takes the column — and
+    // about 800px of it, pushing the related list below. That is what competing
+    // for the column is, and it is why the Pane yields rather than the panel
+    // being read as harmless.
+    const box = await page.eval(`(() => {
+      const panel = document.querySelector('#panels [visibility="ENGAGEMENT_PANEL_VISIBILITY_EXPANDED"]');
+      const related = document.querySelector('#secondary-inner #related');
+      const rail = document.querySelector('#secondary-inner').getBoundingClientRect();
+      const p = panel?.getBoundingClientRect();
+      return { panelWidth: p ? +p.width.toFixed(0) : null,
+        panelHeight: p ? +p.height.toFixed(0) : null,
+        railWidth: +rail.width.toFixed(0),
+        panelTop: p?.top ?? null, relatedTop: related?.getBoundingClientRect().top ?? null };
+    })()`);
+    assert.equal(
+      box.panelWidth, box.railWidth,
+      `the opened panel is ${box.panelWidth}px in a ${box.railWidth}px rail, so it is not taking the column`,
+    );
+    assert.ok(
+      box.panelHeight > 100 && box.relatedTop > box.panelTop,
+      `the opened panel did not take the column's top (${JSON.stringify(box)})`,
+    );
+
+    // The same panel, moved to another of YouTube's rail stacks. Which stack a
+    // panel lands in is YouTube's choice, and a panel opened in this one used to
+    // be invisible to us — the Pane stayed on top of it.
     await page.eval(`(() => {
-      document.querySelector('#panels [visibility="ENGAGEMENT_PANEL_VISIBILITY_EXPANDED"]')?.removeAttribute('visibility');
+      const panel = document.querySelector('#panels [visibility="ENGAGEMENT_PANEL_VISIBILITY_EXPANDED"]');
+      document.querySelector('#inline-panels').append(panel);
+      window.dispatchEvent(new CustomEvent('yt-navigate-finish'));
+      return true;
+    })()`);
+    await stepAside('open-panel');
+
+    await page.eval(`(() => {
+      const panel = document.querySelector('#inline-panels [visibility="ENGAGEMENT_PANEL_VISIBILITY_EXPANDED"]');
+      panel.removeAttribute('visibility');
+      document.querySelector('#panels').append(panel);
       document.querySelector('#primary').closest('[is-two-columns_]').setAttribute('fixed-panels', '');
       window.dispatchEvent(new CustomEvent('yt-navigate-finish'));
       return true;
