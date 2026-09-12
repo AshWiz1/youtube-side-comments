@@ -136,6 +136,38 @@ export function decide({ viewport, page, prefs }) {
 }
 
 /**
+ * Whether a decision asks for anything the page does not already have, given
+ * the decision the arrangement standing on it was made from.
+ *
+ * `last` is `null` when there is no arrangement of ours to leave alone — the
+ * page has just been built, or the previous page's arrangement has been torn
+ * down — and a page like that is arranged whatever the decision says, because
+ * the decision is a fact about the page and not about the page it was decided
+ * for. That is the whole of what navigation adds here, and it is what makes a
+ * decision that merely *equals* the last one land on a page that was rebuilt
+ * under it.
+ *
+ * The comparison is worth making at all because deciding is cheap and arranging
+ * is not: moving the Comments drops the reader's place in the thread, so the
+ * page is only arranged when the decision has actually moved. The width is part
+ * of it, and has to be — a width change is the one decision the page makes
+ * without any of the others changing, so a comparison that looked only at the
+ * action would leave the Comment Pane at a width the engine no longer agrees
+ * with after a restart, or after anything else moved the ceiling.
+ *
+ * @param {object|null} last      The decision the arrangement was made from.
+ * @param {object} decision       The decision for the page in front of us.
+ */
+export function needsArranging(last, decision) {
+  if (!last) return true;
+  return (
+    decision.action !== last.action ||
+    decision.reason !== last.reason ||
+    decision.paneWidth !== last.paneWidth
+  );
+}
+
+/**
  * The width the Comment Pane takes, from a request of any origin — a stored
  * preference, a drag, an arrow key. This is the **only** place a requested
  * width becomes a width, which is what makes it impossible for the pointer and

@@ -1,0 +1,113 @@
+✔ steps aside: off switch (4.9256ms)
+✔ steps aside: Shorts (0.1266ms)
+✔ steps aside: not a Watch Page (0.0647ms)
+✔ steps aside: fullscreen (0.0765ms)
+✔ steps aside: theater mode (0.1249ms)
+✔ steps aside: a live chat (0.1252ms)
+✔ steps aside: an open YouTube panel (0.1174ms)
+✔ steps aside: unknown structure (0.2452ms)
+✔ steps aside: comments disabled (0.0954ms)
+✔ steps aside: YouTube's own single column (0.4192ms)
+✔ steps aside: a viewport too narrow, YouTube's signal absent (0.0877ms)
+✔ steps aside: a viewport one pixel under the fallback (0.0528ms)
+✔ applies: an ordinary Watch Page (0.1259ms)
+✔ applies: a viewport 400px narrower than YouTube needs (0.5395ms)
+✔ applies: the fallback threshold exactly (0.1071ms)
+✔ applies: YouTube's signal absent but room to spare (0.0671ms)
+✔ a Step Aside carries no placement (0.181ms)
+✔ place identifiers are stable (0.0773ms)
+✔ first trigger wins: the off switch outranks everything (0.0974ms)
+✔ first trigger wins: Shorts outranks another page (0.0407ms)
+✔ first trigger wins: fullscreen outranks theater (0.0357ms)
+✔ first trigger wins: a live chat outranks an open panel (0.0357ms)
+✔ first trigger wins: a mode outranks the structure (0.0404ms)
+✔ first trigger wins: structure outranks no comments (0.038ms)
+✔ first trigger wins: no room outranks no comments (0.0615ms)
+✔ first trigger wins: YouTube's column outranks our viewport (0.0479ms)
+✔ arranges again: no arrangement to leave alone — true (0.0636ms)
+✔ arranges again: no arrangement, on a page that Stepped Aside — true (0.0606ms)
+✔ arranges again: the same arrangement — false (0.0244ms)
+✔ arranges again: the same Step Aside — false (0.0285ms)
+✔ arranges again: another width — true (0.3965ms)
+✔ arranges again: another reason — true (0.0641ms)
+✔ arranges again: a Step Aside where there was a layout — true (0.1499ms)
+✔ arranges again: a layout where there was a Step Aside — true (0.3657ms)
+✔ arranges again: a container that shrinks the Pane — true (0.0609ms)
+✔ a decision is compared by everything it carries (0.2393ms)
+✔ width: 500 in a 1920px container -> 500 (0.1081ms)
+✔ width: 0 in a 1920px container -> 402 (0.1228ms)
+✔ width: -1 in a 1920px container -> 402 (0.1083ms)
+✔ width: Infinity in a 1920px container -> 402 (0.1363ms)
+✔ width: wide in a 1920px container -> 402 (0.0549ms)
+✔ width: null in a 1920px container -> 402 (0.0516ms)
+✔ width: 100 in a 1920px container -> 320 (0.09ms)
+✔ width: 319 in a 1920px container -> 320 (0.0533ms)
+✔ width: 320 in a 1920px container -> 320 (0.0601ms)
+✔ width: 321 in a 1920px container -> 321 (0.0415ms)
+✔ width: 9999 in a 2000px container -> 1200 (0.0353ms)
+✔ width: 9999 in a 1200px container -> 720 (0.0232ms)
+✔ width: 9999 in a 1199px container -> 719 (0.0208ms)
+✔ width: 9999 in a 1000px container -> 520 (0.021ms)
+✔ width: 9999 in a 800px container -> 320 (0.0233ms)
+✔ width: 9999 in a 700px container -> 320 (0.0209ms)
+✔ the Splitter resolves 402 in a 2000px container to 402 (0.0438ms)
+✔ the Splitter resolves 1180 in a 2000px container to 1180 (0.0282ms)
+✔ the Splitter resolves 1470 in a 2000px container to 1200 (0.033ms)
+✔ the Splitter resolves 9999 in a 2000px container to 1200 (0.0376ms)
+✔ the Splitter resolves 10 in a 2000px container to 320 (0.0261ms)
+✔ a container the page cannot measure leaves the floor and the default (0.0499ms)
+✔ the ceiling never undercuts the floor (2.2782ms)
+✔ the second term is exactly the viewport the layout needs (0.0974ms)
+✔ reason strings are stable (0.1212ms)
+✔ does not mutate its input (0.1478ms)
+▶ Comment Pane on a real Watch Page
+  ✔ the Comment Pane exists and holds the Comments (3.003ms)
+  ✔ the Comments loaded on their own, with nothing left loading (6.4671ms)
+  ✔ the Player keeps the left column and never overlaps the Comment Pane (1.2816ms)
+  ✔ the Player's internals are resynced to its own frame (173.585ms)
+  ✔ the page keeps its own metadata, and its rail keeps its own panels (33.0925ms)
+  ✔ the Recommendation Strip is below the Player and the Pane, not beside them (59.6213ms)
+  ✔ the related videos loaded in the Strip, laid out for the width they now have (21.3171ms)
+  ✔ the Strip keeps its grid at a narrower viewport, and gives the rail back its column (626.7754ms)
+  ✔ theater mode Steps Aside and restores the Native Layout exactly (1235.3737ms)
+  ✔ YouTube's own single column Steps Aside, and outranks our viewport guard (1604.5591ms)
+  ✔ YouTube's own panels Step Aside while they compete for the column (2293.9271ms)
+  ✔ a fullscreen document Steps Aside (2429.0792ms)
+  ✔ the Splitter is a separator between the Player and the Comment Pane (33.854ms)
+  ✔ dragging the Splitter resizes the Comment Pane and the Player keeps up (1509.1686ms)
+  ✔ the Comment Pane stops at its floor and its ceiling (2473.7863ms)
+  ✔ the arrow keys move the Splitter, and double-click puts it back (1187.3533ms)
+  ✔ a burst of width changes costs one Player resync per frame, not one each (905.9111ms)
+  ✔ the width is one global preference, not a fact about one video (6980.2639ms)
+  ✔ navigating to another video lands arranged, without a refresh (11410.4264ms)
+  ✔ navigating back and forth re-arranges every time, leaving no residue (73383.444ms)
+  ✔ navigating away from a Watch Page leaves the Native Layout intact (18677.6695ms)
+  ✖ a Watch Page opened in a background tab is arranged when the tab is shown (101194.8232ms)
+  ✔ a video YouTube delivers no comments for Steps Aside, leaving no empty Pane (3311.888ms)
+  ✔ an unrecognised page Steps Aside and records why (5.0093ms)
+  ✔ theater mode is detected at load, not only on toggle (1433.8891ms)
+✖ Comment Pane on a real Watch Page (241064.024ms)
+ℹ tests 87
+ℹ suites 1
+ℹ pass 86
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 241278.8178
+
+✖ failing tests:
+
+test at test\smoke.test.js:1410:3
+✖ a Watch Page opened in a background tab is arranged when the tab is shown (101194.8232ms)
+  AssertionError [ERR_ASSERTION]: the Comment Pane never appeared on a Watch Page that was opened in the background — while hidden it was {"applied":null,"reason":"comments-disabled","comments":""}, and shown it is {"href":"https://www.youtube.com/watch?v=dQw4w9WgXcQ","ready":"complete","applied":null,"reason":"comments-disabled","built":true,"pane":false}
+      at TestContext.<anonymous> (file:///C:/Users/Public/Desktop/YoutubeSideComments/test/smoke.test.js:1443:14)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Suite.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }

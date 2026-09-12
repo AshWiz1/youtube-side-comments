@@ -115,6 +115,10 @@ export function createAdapter(doc, { splitter } = {}) {
   let playerWatch = null;
   /** One Player resync per frame, however many widths a drag passes through. */
   let resyncQueued = false;
+  /** The watch root the mode observer is on, so that it is re-pointed at a new
+   *  one rather than duplicated or left behind. */
+  let watchedRoot = null;
+  let modeWatch = null;
 
   /**
    * Locate the Watch Page by structure and identifiers rather than by
@@ -149,14 +153,21 @@ export function createAdapter(doc, { splitter } = {}) {
    * still reads as one — the extension would step aside on the way out and stay
    * aside on the way back. YouTube writing the flag is the moment the answer
    * actually changes, whenever that is.
+   *
+   * The observer follows the root rather than staying on the element it first
+   * saw: YouTube replaces its watch-page roots between videos, and an observer
+   * left on a detached one hears nothing, which leaves the extension sitting on
+   * a decision about a page that is gone.
    */
   function observeModes(onChange) {
     const root = watchRoot(locate());
     if (!root) return false;
-    new MutationObserver(onChange).observe(root, {
-      attributes: true,
-      attributeFilter: MODE_FLAGS,
-    });
+    if (root !== watchedRoot) {
+      modeWatch?.disconnect();
+      watchedRoot = root;
+      modeWatch = new MutationObserver(onChange);
+      modeWatch.observe(root, { attributes: true, attributeFilter: MODE_FLAGS });
+    }
     return true;
   }
 
@@ -228,6 +239,12 @@ export function createAdapter(doc, { splitter } = {}) {
     };
   }
 
+  /**
+   * Carry out a decision. Returns whether the page is now in the state the
+   * decision describes — `false` only when there was nothing to arrange, which
+   * is how the bootstrap can tell a page that is *young* from one that has been
+   * arranged, and ask again rather than remember an arrangement it never made.
+   */
   function apply(decision) {
     if (decision.action !== ACTION_APPLY) {
       // The single Step Aside path. Undoing an applied arrangement and saying
@@ -235,12 +252,12 @@ export function createAdapter(doc, { splitter } = {}) {
       // the same page.
       revert();
       doc.documentElement.dataset.yscReason = decision.reason ?? '';
-      return;
+      return true;
     }
 
     const page = locate();
     const comments = doc.querySelector(COMMENTS);
-    if (!page || !comments) return;
+    if (!page || !comments) return false;
 
     // Remember the original position before the first move — the Comments sit
     // behind an extra wrapper element inside `#below`, so the parent is
@@ -268,7 +285,13 @@ export function createAdapter(doc, { splitter } = {}) {
       const strip = stripIn(page);
       if (!strip.contains(related)) {
         relatedHome = { parent: related.parentNode, next: related.nextSibling };
-        strip.append(related);
+        // The Strip holds the list YouTube is offering now and nothing else.
+        // YouTube can *replace* the related element rather than refilling it —
+        // it builds a fresh one for the next video — and the one we moved is
+        // then a stale copy of the previous video's list, sitting in a
+        // container nothing re-checks. It goes with the Strip rather than being
+        // left beside the live one, where it would read as two lists.
+        strip.replaceChildren(related);
       }
     }
 
@@ -280,6 +303,7 @@ export function createAdapter(doc, { splitter } = {}) {
     // dragging through, and a page that has just been arranged is the one moment
     // the Player has certainly not been resynced by YouTube itself.
     resyncPlayer();
+    return true;
   }
 
   /**
@@ -363,6 +387,20 @@ export function createAdapter(doc, { splitter } = {}) {
   }
 
   /**
+   * Leave the page we are on. Everything we put in it comes out, and so does the
+   * judgement we had formed about its Comments: how long one page's Comments
+   * region has been empty is a fact about that page, and dating the next page's
+   * empty region from the last one's reads a young page as a video whose comments
+   * are turned off. It is deliberately not part of `revert()`: Stepping Aside
+   * from a page leaves us on it, and an empty Comments region there is exactly
+   * the case whose clock has to keep running until YouTube answers for it.
+   */
+  function teardown() {
+    blankSince = 0;
+    revert();
+  }
+
+  /**
    * YouTube writes the Player's internal sizes on window resize and attaches no
    * observer to the Player, so without this the video element and the control
    * bar overflow their own frame by hundreds of pixels once the column changes
@@ -381,6 +419,7 @@ export function createAdapter(doc, { splitter } = {}) {
     readState,
     apply,
     revert,
+    teardown,
     observeModes,
     setPaneWidth,
     /** The width the Pane is actually at, which is what a gesture starts from. */

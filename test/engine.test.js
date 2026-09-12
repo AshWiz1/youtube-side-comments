@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   decide,
+  needsArranging,
   resolvePaneWidth,
   paneCeiling,
   ACTION,
@@ -92,6 +93,47 @@ for (const [name, s, reason] of firsts) {
     assert.equal(decide(state(s)).reason, reason);
   });
 }
+
+// [what the page already has, the decision for it, whether it is arranged
+// again]. The decisions are made rather than written down, so the comparison is
+// made of the same objects the Adapter obeys.
+const on = (s) => decide(state(s));
+const arrangements = [
+  // Nothing standing: a page that has just been built, or one whose previous
+  // arrangement was torn down for a navigation. Whatever the decision says, the
+  // page is not arranged the way it asks for, so it is arranged again — which
+  // is the whole of what navigation asks of this rule.
+  ['no arrangement to leave alone', null, on({}), true],
+  ['no arrangement, on a page that Stepped Aside', null, on({ page: { isTheater: true } }), true],
+  // An arrangement already standing is left alone when the decision has not
+  // moved — that is what keeps a run of resizes off the Comments.
+  ['the same arrangement', on({}), on({}), false],
+  ['the same Step Aside', on({ page: { isTheater: true } }), on({ page: { isTheater: true } }), false],
+  // And re-made when any part of the decision moves.
+  ['another width', on({ prefs: { paneWidth: 500 } }), on({ prefs: { paneWidth: 600 } }), true],
+  ['another reason', on({ page: { isTheater: true } }), on({ page: { isShorts: true } }), true],
+  ['a Step Aside where there was a layout', on({}), on({ page: { isTheater: true } }), true],
+  ['a layout where there was a Step Aside', on({ page: { isTheater: true } }), on({}), true],
+  // The same video, a different window: the width the page can carry moves with
+  // it, so the Pane has to be re-made at the width the engine now resolves.
+  ['a container that shrinks the Pane', on({ prefs: { paneWidth: 900 } }),
+    on({ prefs: { paneWidth: 900 }, viewport: { width: 900, container: 900 } }), true],
+];
+for (const [name, last, decision, again] of arrangements) {
+  test(`arranges again: ${name} — ${again}`, () => {
+    assert.equal(needsArranging(last, decision), again);
+  });
+}
+
+// The reason is what the popup renders, so a Step Aside that has changed its
+// mind is a change even though the page looks the same.
+test('a decision is compared by everything it carries', () => {
+  const same = on({ page: { isTheater: true } });
+  assert.equal(needsArranging(same, { ...same }), false);
+  assert.equal(needsArranging(same, { ...same, action: ACTION.APPLY }), true);
+  assert.equal(needsArranging(same, { ...same, reason: REASON.SHORTS }), true);
+  assert.equal(needsArranging(same, { ...same, paneWidth: MIN_PANE_WIDTH }), true);
+});
 
 // [requested width, container, the width the Comment Pane takes]. The container
 // is the box the Player and the Pane share, and the default here is an ordinary

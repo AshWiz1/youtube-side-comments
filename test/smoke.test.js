@@ -169,7 +169,10 @@ describe('Comment Pane on a real Watch Page', { skip: SKIP }, () => {
     const r = await page.eval(`(() => { ${PRELUDE}
       const comments = document.querySelector('#comments');
       const related = document.querySelector('#related');
-      const cards = [...document.querySelectorAll('#secondary-inner #related ${CARD}')];
+      // Wrapped in :is() rather than left as a bare list: in a comma-separated
+      // selector only the first term would be scoped to the rail, and the rest
+      // would count any card anywhere on the page.
+      const cards = [...document.querySelectorAll('#secondary-inner #related :is(${CARD})')];
       const lefts = new Set(cards.map((c) => Math.round(c.getBoundingClientRect().left)));
       const orderOf = (e) => [...(e?.parentElement?.children ?? [])].map(sig);
       const common = (a, b) => a.filter((s) => b.includes(s)).join('>');
@@ -213,8 +216,14 @@ describe('Comment Pane on a real Watch Page', { skip: SKIP }, () => {
         // grid was ours, so leaving it behind would be residue of the layout.
         relatedColumns: lefts.size,
         // Carried only so a failure says why: where the list sits now, and how
-        // many copies of it YouTube has in the page at all.
-        relatedCopies: document.querySelectorAll('#related').length,
+        // many copies of it YouTube has in the page at all — with what each of
+        // them holds, because a second copy is only a problem if it is a list.
+        relatedCopies: [...document.querySelectorAll('#related')].map((e) => ({
+          inRail: !!e.closest('#secondary-inner'),
+          parent: sig(e.parentElement),
+          cards: e.querySelectorAll('${CARD}').length,
+          columns: new Set([...e.querySelectorAll('${CARD}')].map((c) => Math.round(c.getBoundingClientRect().left))).size,
+        })),
         relatedParent: sig(related?.parentElement),
       };
     })()`);
@@ -895,6 +904,570 @@ describe('Comment Pane on a real Watch Page', { skip: SKIP }, () => {
       Math.abs(restored - chosen) <= 1,
       `the next video opened with a ${restored}px Pane, not the ${chosen}px it was left at`,
     );
+  });
+
+  // ---------------------------------------------------------------- Navigation
+
+  /**
+   * Our own arrangement, observed as it changes rather than inferred from the
+   * code: the transitions of `[Comment Pane present, layout attribute]`, plus a
+   * count of YouTube's own navigation events. The pair is what tells a teardown
+   * of ours from a pane YouTube removed for us — a pane YouTube destroyed
+   * leaves the layout attribute standing, so `[false, null]` can only be the
+   * extension having put the page back to the Native Layout.
+   */
+  const RECORD_NAVIGATION = `
+    window.__ysc = [];
+    window.__nav = { start: 0, finish: 0 };
+    addEventListener('yt-navigate-start', () => { window.__nav.start++; });
+    addEventListener('yt-navigate-finish', () => { window.__nav.finish++; });
+    const snap = () => {
+      const s = [!!document.getElementById('ysc-pane'), document.documentElement.dataset.ysc || null];
+      const was = window.__ysc[window.__ysc.length - 1];
+      if (!was || was[0] !== s[0] || was[1] !== s[1]) window.__ysc.push(s);
+    };
+    new MutationObserver(snap).observe(document, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-ysc'] });
+    window.__forget = () => { window.__ysc = []; window.__nav = { start: 0, finish: 0 }; };
+    true;
+  `;
+
+  /** Everything an arrival has to be true of, read in one go. */
+  const arrangement = (p = page) => p.eval(`(() => { ${PRELUDE}
+    const pane = document.getElementById('ysc-pane');
+    const strip = document.getElementById('ysc-strip');
+    const comments = document.querySelector('#comments');
+    const related = document.querySelector('#related');
+    const root = document.documentElement;
+    const box = (e) => { const b = e && e.getBoundingClientRect(); return b ? {
+      left: +b.left.toFixed(1), right: +b.right.toFixed(1), top: +b.top.toFixed(1),
+      bottom: +b.bottom.toFixed(1), width: +b.width.toFixed(1), height: +b.height.toFixed(1) } : null; };
+    const ours = (e) => (e.id || '').includes('ysc') || [...e.attributes].some((a) => a.name.includes('ysc'));
+    const rendered = [...(pane ? pane.querySelectorAll('ytd-comment-thread-renderer') : [])]
+      .find((t) => t.getBoundingClientRect().height > 0);
+    return {
+      video: new URL(location.href).searchParams.get('v'),
+      applied: root.dataset.ysc || null,
+      reason: root.dataset.yscReason || null,
+      width: +parseFloat(getComputedStyle(root).getPropertyValue('--ysc-pane-width')) || 0,
+      pane: box(pane), strip: box(strip), player: box(document.querySelector('#player')),
+      inRail: !!document.querySelector('#secondary-inner > #ysc-pane'),
+      holdsComments: !!pane && pane.contains(comments),
+      threads: pane ? pane.querySelectorAll('ytd-comment-thread-renderer').length : 0,
+      splitter: !!document.querySelector('#secondary-inner > #ysc-splitter'),
+      stripHoldsRelated: !!strip && strip.contains(related),
+      // Any related list that is *not* in the Strip is a second one: YouTube can
+      // hand the page a fresh element rather than refilling the one we moved,
+      // and what we are holding is then the previous video's list. (YouTube's
+      // own zero-size skeleton placeholder also carries the id, which is why
+      // this counts the lists outside the Strip rather than the lists at all.)
+      relatedOutsideStrip: [...document.querySelectorAll('#related')].filter((e) => !strip?.contains(e)).length,
+      scrollTop: pane ? Math.round(pane.scrollTop) : null,
+      scrollY: Math.round(window.scrollY),
+      // The first thread that has a box. YouTube leaves zero-size placeholder
+      // renderers among the Comments, and the first one in document order can be
+      // one of those rather than a comment anybody can read.
+      firstThread: box(rendered),
+      firstOnScreen: onScreen(rendered, pane),
+      overflow: root.scrollWidth - root.clientWidth,
+      // Only so an overflow failure names the element rather than the number.
+      offenders: [...document.querySelectorAll('body *')]
+        .map((e) => ({ e, r: e.getBoundingClientRect() }))
+        .filter(({ r }) => r.width > 0 && r.right > root.clientWidth + 0.5)
+        .sort((a, b) => b.r.right - a.r.right).slice(0, 3)
+        .map(({ e, r }) => sig(e) + ' ' + Math.round(r.left) + '-' + Math.round(r.right) + ' in ' + sig(e.parentElement)),
+      // The chain the Comments sit at, so a drift in nesting depth or in the
+      // container they were moved into cannot pass unnoticed.
+      chain: chain(comments && comments.parentElement).join('<'),
+      // One of each, and only ever one: anything that accumulates as the layout
+      // is torn down and re-applied shows up here as a second copy.
+      counts: {
+        pane: document.querySelectorAll('#ysc-pane').length,
+        strip: document.querySelectorAll('#ysc-strip').length,
+        splitter: document.querySelectorAll('#ysc-splitter').length,
+        comments: document.querySelectorAll('#comments').length,
+        ours: [...document.querySelectorAll('body *')].filter(ours).length,
+      },
+      // Where each copy of the related list is, for the diagnosis a failure
+      // needs: which one is ours, and which one YouTube is offering now.
+      relateds: [...document.querySelectorAll('#related')].map((e) => {
+        const b = e.getBoundingClientRect();
+        return {
+          inStrip: !!strip && strip.contains(e),
+          chain: chain(e.parentElement).join('<'),
+          cards: e.querySelectorAll('${CARD}').length,
+          box: Math.round(b.width) + 'x' + Math.round(b.height),
+          display: getComputedStyle(e).display,
+        };
+      }),
+      timeline: window.__ysc || null,
+      nav: window.__nav || null,
+    };
+  })()`);
+
+  /** Every arrival, wherever it came from, has to be arranged the same way. */
+  const assertArranged = (r, why) => {
+    const at = `${why} — ${JSON.stringify({
+      video: r.video, reason: r.reason, counts: r.counts, chain: r.chain, relateds: r.relateds,
+      scrollTop: r.scrollTop, scrollY: r.scrollY, firstThread: r.firstThread,
+    })}`;
+    assert.equal(r.applied, 'on', `the layout is not applied (${at})`);
+    assert.equal(r.reason, null, `the extension Stepped Aside (${at})`);
+    assert.equal(r.inRail, true, `the Comment Pane is not hosted in the rail (${at})`);
+    assert.equal(r.holdsComments, true, `the Comment Pane does not hold the Comments (${at})`);
+    assert.equal(r.splitter, true, `the Splitter is missing (${at})`);
+    assert.equal(r.stripHoldsRelated, true, `the related videos are not in the Recommendation Strip (${at})`);
+    assert.ok(r.strip && r.strip.top >= r.player.bottom - 1, `the Strip is not below the Player (${at})`);
+    assert.ok(
+      r.pane.width >= 320 && r.pane.left >= r.player.right - 1,
+      `the Comment Pane is not beside the Player (${at})`,
+    );
+    assert.equal(r.relatedOutsideStrip, 0, `the related videos are somewhere other than the Strip (${at})`);
+    assert.deepEqual(
+      r.counts,
+      { pane: 1, strip: 1, splitter: 1, comments: 1, ours: 3 },
+      `the page accumulated residue (${at})`,
+    );
+    assert.equal(r.overflow, 0, `the page scrolls sideways by ${r.overflow}px (${at}) — ${JSON.stringify(r.offenders)}`);
+  };
+
+  /** The one thing no screenshot can show: the page was back in the Native
+   *  Layout *before* the new arrangement landed on it, and it got there by
+   *  navigation rather than by a fresh document — which is what the navigation
+   *  record still being there, and YouTube's page-ready event having fired,
+   *  together say. The counts are not pinned to the number of steps: YouTube
+   *  starts and finishes navigations on its own bookkeeping, and does not always
+   *  finish the ones it starts. */
+  const assertTornDownFirst = (r, why) => {
+    assert.ok(
+      r.nav && r.nav.finish >= 1,
+      `${why}: ${JSON.stringify(r.nav)} — the layout did not survive a navigation`,
+    );
+    assert.deepEqual(r.timeline.at(-1), [true, 'on'], `${why}: the new page never got the layout`);
+    assert.deepEqual(
+      r.timeline.at(-2),
+      [false, null],
+      `${why}: the previous arrangement was not fully undone first — ${JSON.stringify(r.timeline)}`,
+    );
+  };
+
+  /** A real click, through CDP's pointer input, on a spot a page-side read has
+   *  already brought into view. YouTube's own links are what a reader clicks,
+   *  and a synthetic `.click()` on one is measured to be routed *sometimes* — a
+   *  click that silently does nothing turns a navigation into a minute of
+   *  waiting for one. */
+  const mouseClick = async (spot) => {
+    for (const type of ['mousePressed', 'mouseReleased']) {
+      await page.send('Input.dispatchMouseEvent', {
+        type, x: spot.x, y: spot.y, button: 'left',
+        buttons: type === 'mousePressed' ? 1 : 0, clickCount: 1,
+      });
+    }
+    return spot;
+  };
+
+  /** A link, clicked where it is drawn — or clicked directly when YouTube has
+   *  nothing drawn for it, which happens: the tab strip carries a second, hidden
+   *  copy of the same link, and no pointer can be put into the middle of an
+   *  element with no box. */
+  const clickSelector = async (selector) => {
+    const spot = await page.eval(`(() => {
+      const link = document.querySelector(${JSON.stringify(selector)});
+      if (!link) return null;
+      // What a reader clicks is whatever is drawn: YouTube ships links with no
+      // box of their own, so the point comes from the nearest ancestor that has
+      // one.
+      let drawn = link;
+      for (let n = link; n && n !== document.body; n = n.parentElement) {
+        const b = n.getBoundingClientRect();
+        if (b.width > 2 && b.height > 2) { drawn = n; break; }
+      }
+      drawn.scrollIntoView({ block: 'center', behavior: 'instant' });
+      const b = drawn.getBoundingClientRect();
+      return { x: Math.round(b.left + b.width / 2), y: Math.round(b.top + b.height / 2), href: link.href };
+    })()`);
+    if (!spot) return null;
+    await mouseClick(spot);
+    return spot;
+  };
+
+  /**
+   * A click on a video YouTube is offering: a related video on a Watch Page, or
+   * one of the videos on the page the test navigated away to. YouTube's router
+   * does the navigating — the test only clicks one of YouTube's own links, which
+   * is measured to be the difference between a navigation and a document load.
+   * An anchor the test makes itself is not routed, however it is placed.
+   *
+   * Cards that have not rendered, that are a mix or a playlist, and that are a
+   * live stream or a Short are passed over: the last two Step Aside, correctly,
+   * for reasons that have nothing to do with navigation. `skip` takes the next
+   * one along, for a landing this test cannot say anything about.
+   */
+  const cardSpot = (skip = 0) =>
+    page.eval(`(() => {
+      const here = new URL(location.href).searchParams.get('v');
+      const seen = new Set();
+      const cards = [...document.querySelectorAll('a[href^="/watch"]')].filter((a) => {
+        const card = a.closest('ytd-compact-video-renderer, yt-lockup-view-model, ytd-rich-item-renderer, ytd-video-renderer, ytd-grid-video-renderer');
+        const text = card ? card.innerText.trim() : '';
+        const id = new URL(a.href).searchParams.get('v');
+        // One per video: a card carries an anchor on its thumbnail and another
+        // on its title, so counting both would spend half the attempts on the
+        // same video twice.
+        if (!id || id === here || seen.has(id) || text.length <= 10) return false;
+        // A live stream or a Short, by YouTube's own marker on the thumbnail
+        // rather than by what the card happens to say: the badge is the thing
+        // that is always there, and the word is not.
+        if (card.querySelector('[overlay-style="LIVE"], [overlay-style="SHORTS"]')) return false;
+        if (/\\b(live|shorts|premiere|upcoming)\\b/i.test(text)) return false;
+        seen.add(id);
+        return true;
+      });
+      // The first card from here that can actually be clicked: the card is what
+      // is drawn and pressed — its link has no box of its own — and a card in a
+      // horizontal shelf can sit half outside the window, where a point taken
+      // from its middle falls on something else entirely.
+      for (let i = ${skip}; i < cards.length; i++) {
+        const card = cards[i].closest('ytd-compact-video-renderer, yt-lockup-view-model, ytd-rich-item-renderer, ytd-video-renderer, ytd-grid-video-renderer');
+        if (!card) continue;
+        card.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+        const b = card.getBoundingClientRect();
+        const x = Math.round(b.left + b.width / 2), y = Math.round(b.top + b.height / 2);
+        if (x < 1 || y < 1 || x > innerWidth - 1 || y > innerHeight - 1) continue;
+        return {
+          x, y, href: cards[i].href,
+          text: card.innerText.replace(/\\s+/g, ' ').trim().slice(0, 50),
+        };
+      }
+      return null;
+    })()`);
+
+  /** How a hop has landed: arranged on the video it arrived at, or on one this
+   *  test has nothing to say about — a live stream, a Short, or a video whose
+   *  comments YouTube has turned off. All three are facts about the page rather
+   *  than signs of one still being built, so none of them is worth waiting on. */
+  const landed = (from) => `(() => {
+    const pane = document.getElementById('ysc-pane');
+    const region = document.querySelector('#comments');
+    const threads = [...(pane ? pane.querySelectorAll('ytd-comment-thread-renderer') : [])];
+    if (new URL(location.href).searchParams.get('v') === ${JSON.stringify(from)}) return false;
+    if (document.documentElement.dataset.ysc === 'on' && !!pane && pane.contains(region) &&
+        threads.some((t) => t.getBoundingClientRect().height > 0)) return 'arranged';
+    const reason = document.documentElement.dataset.yscReason;
+    if (reason === 'live-chat' || reason === 'shorts') return 'aside';
+    if (region && /comments are (turned off|disabled)/i.test(region.innerText)) return 'aside';
+    return false;
+  })()`;
+
+  /**
+   * Puts the page on a video this test knows is a plain one, by loading it
+   * afresh — the fixture, not a step under test, and only ever at the start of
+   * one: a document load wipes the page, so anything about what accumulates
+   * across navigations has to be measured between hops that are all in-page.
+   *
+   * It is needed because the videos YouTube offers are not all usable ones:
+   * this environment's recommendations drift into children's content, whose
+   * comments YouTube has turned off, and a video whose comments are off Steps
+   * Aside — correctly — which leaves nothing to navigate *from*.
+   */
+  const startFromKnownVideo = async () => {
+    await page.send('Page.navigate', { url: WATCH_URL });
+    await page.waitFor(
+      `!!document.querySelector('#ysc-pane ytd-comment-thread-renderer')`,
+      'the known video to load',
+      90_000,
+    );
+    await page.eval(RECORD_NAVIGATION);
+  };
+
+  /** The Comment Pane scrolled down, so that arriving at the top of a new one is
+   *  a fact rather than a default. Waited for, because the Comments are
+   *  YouTube's: a Pane that has not filled yet is a Pane with nothing to scroll. */
+  const scrollPaneDown = () =>
+    poll(`(() => {
+      const pane = document.getElementById('ysc-pane');
+      if (!pane) return false;
+      pane.scrollTop = 400;
+      return pane.scrollTop > 0;
+    })()`, 20_000);
+
+  /** The first truthy value `expression` takes within `ms`, or `false`. */
+  const poll = async (expression, ms) => {
+    for (const deadline = Date.now() + ms; Date.now() < deadline; ) {
+      const value = await page.eval(expression).catch(() => false);
+      if (value) return value;
+      await sleep(300);
+    }
+    return false;
+  };
+
+  /** One click, waited out as an arrival, or `null` for a landing this test has
+   *  nothing to say about — returned with what the page was, for the failure
+   *  that gives up. */
+  const clickAndWait = async (skip) => {
+    const from = await page.eval(`new URL(location.href).searchParams.get('v')`);
+    const here = await page.eval(`location.href`);
+    const spot = await cardSpot(skip);
+    assert.ok(spot, 'no video to navigate to on the page');
+    await mouseClick(spot);
+    // A click has to move the page before an arrival is worth reading: a card
+    // for the video already on screen navigates nowhere, and reading the page it
+    // did not leave would report a video the test never went to.
+    if (!(await poll(`location.href !== ${JSON.stringify(here)}`, 10_000))) {
+      return { unusable: { href: here, why: 'that card navigated nowhere' } };
+    }
+    if ((await poll(landed(from), 25_000)) === 'arranged') return { arrived: await arrangement() };
+    return {
+      unusable: await page.eval(`({
+        href: location.href, reason: document.documentElement.dataset.yscReason || null,
+        applied: document.documentElement.dataset.ysc || null,
+        pane: !!document.getElementById('ysc-pane'),
+        threads: document.querySelectorAll('#ysc-pane ytd-comment-thread-renderer').length,
+        region: (document.querySelector('#comments')?.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 50),
+      })`).catch(() => null),
+    };
+  };
+
+  /** A video from the rail of the known video — the reader's own gesture of
+   *  clicking a related video, with each attempt starting from the known video
+   *  again: a landing this test cannot use is a page whose own recommendations
+   *  are the same kind of thing, so walking down its list would only find more
+   *  of them. That reload is the fixture being reset between attempts, and it is
+   *  never used between the hops an accumulation is claimed across. */
+  const hopFromRail = async () => {
+    let last = null;
+    for (let skip = 0; skip < 5; skip++) {
+      await startFromKnownVideo();
+      await page.eval(`window.__forget()`);
+      const { arrived, unusable } = await clickAndWait(skip);
+      if (arrived) return arrived;
+      last = unusable;
+    }
+    throw new Error(`the rail offered nothing this test could use — the last landing was ${JSON.stringify(last)}`);
+  };
+
+  /** A video from the page the Watch Page's channel lives on. Nothing is
+   *  reloaded between attempts: a channel's own page offers its own videos, so a
+   *  landing this test cannot use is the exception rather than the rule — and a
+   *  page of YouTube's own recommendations, which is what the home feed is, is a
+   *  list that in this environment runs into children's videos whose comments
+   *  YouTube has turned off. */
+  const hopFromChannel = async () => {
+    let last = null;
+    for (let skip = 0; skip < 8; skip++) {
+      const { arrived, unusable } = await clickAndWait(skip);
+      if (arrived) return arrived;
+      last = unusable;
+    }
+    throw new Error(`the channel offered nothing this test could use — the last landing was ${JSON.stringify(last)}`);
+  };
+
+  /** Away to the channel the video belongs to, by clicking the channel link
+   *  under it, waited out as an arrival: the page itself, with nothing of ours
+   *  left on it. Waiting only for our own container to go would be satisfied by
+   *  the teardown, which happens on the way out rather than on the way in.
+   *
+   *  Then the extension is asked to speak for the page, because YouTube does not
+   *  always finish what it starts: measured, a navigation now and then fires
+   *  `yt-navigate-start` and never `yt-navigate-finish`, and a page that never
+   *  announces itself is one the extension never decides about — right to leave
+   *  alone, but silent about why. The navigation is the test's and is asserted
+   *  above; asking for the reason only makes it a fact rather than a race. */
+  const toChannel = async () => {
+    // Waited for first: the metadata is YouTube's to render, and a Watch Page
+    // that has its Comments can still be a moment away from its channel link.
+    const linked = await poll(`!!document.querySelector('#owner a, ytd-video-owner-renderer a')`, 20_000);
+    assert.ok(
+      linked,
+      `no link off the Watch Page to navigate by — ${await page.eval(`JSON.stringify({
+        href: location.href,
+        owner: !!document.querySelector('#owner'),
+        meta: !!document.querySelector('ytd-watch-metadata'),
+        applied: document.documentElement.dataset.ysc || null,
+      })`).catch(() => null)}`,
+    );
+    const { href: left } = (await clickSelector('#owner a, ytd-video-owner-renderer a')) ?? {};
+    const arrived = await poll(
+      `location.pathname !== '/watch' && !!document.querySelector('ytd-browse, ytd-rich-grid-renderer') &&
+        !document.getElementById('ysc-pane') && !document.documentElement.dataset.ysc`,
+      60_000,
+    );
+    assert.ok(
+      arrived,
+      `the Watch Page was never left — ${await page.eval(`JSON.stringify({
+        href: location.href, applied: document.documentElement.dataset.ysc || null,
+        reason: document.documentElement.dataset.yscReason || null,
+        pane: !!document.getElementById('ysc-pane'), nav: window.__nav || null,
+      })`).catch(() => null)}`,
+    );
+    // Read before asking, so that what YouTube itself fired is what is counted.
+    const nav = await page.eval(`window.__nav || null`);
+    await page.eval(`dispatchEvent(new CustomEvent('yt-navigate-finish'))`);
+    return { left, nav };
+  };
+
+  /** A round trip: away to the channel the video belongs to — a page this
+   *  extension does nothing on — and back to a Watch Page that page offers. Two
+   *  real in-page navigations, in both directions, each started by clicking
+   *  something YouTube itself put there. */
+  const roundTrip = async () => {
+    await toChannel();
+    return hopFromChannel();
+  };
+
+  test('navigating to another video lands arranged, without a refresh', async () => {
+    await startFromKnownVideo();
+    const before = await arrangement();
+    assert.equal(before.applied, 'on', 'the layout was not applied to navigate from');
+
+    // Read a thread that is about to stop existing: the Comment Pane that comes
+    // back must not still be holding this position in it.
+    assert.ok(await scrollPaneDown(), 'the Comment Pane never became scrollable, so nothing was measured');
+
+    const after = await hopFromRail();
+
+    assertArranged(after, 'arriving at another video');
+    assertTornDownFirst(after, 'arriving at another video');
+    assert.ok(after.threads > 0, 'the new video’s Comments did not load');
+    assert.equal(after.scrollTop, 0, 'the Comment Pane kept the previous video’s scroll position');
+    assert.equal(
+      after.firstOnScreen,
+      true,
+      `the first comment thread is not visible in the Comment Pane — ${JSON.stringify({
+        threads: after.threads, scrollTop: after.scrollTop, scrollY: after.scrollY,
+        pane: after.pane, firstThread: after.firstThread,
+      })}`,
+    );
+    assert.equal(after.width, before.width, 'the width preference did not survive the navigation');
+    assert.equal(after.chain, before.chain, 'the Comments arrived at a different nesting depth');
+  });
+
+  test('navigating back and forth re-arranges every time, leaving no residue', async () => {
+    await startFromKnownVideo();
+    const opened = await arrangement();
+    // Three round trips, six in-page navigations in all, in both directions.
+    // Every arrival has to be the same arrangement as the first, which is what
+    // "nothing accumulated" means — and each one is read from a thread that is
+    // about to stop existing, so the Pane that comes back can never be holding
+    // the previous video's position in it.
+    for (let n = 1; n <= 3; n++) {
+      await scrollPaneDown();
+      await page.eval(`window.__forget()`);
+      const r = await roundTrip();
+      const why = `round trip ${n}, back on ${r.video}`;
+      assertArranged(r, why);
+      assertTornDownFirst(r, why);
+      assert.ok(r.threads > 0, `${why}: the Comments did not load`);
+      assert.equal(r.firstOnScreen, true, `${why}: the first comment thread is not visible`);
+      assert.equal(r.scrollTop, 0, `${why}: the Comment Pane kept the previous video’s scroll position`);
+      assert.equal(r.width, opened.width, `${why}: the width preference did not survive`);
+      assert.equal(r.chain, opened.chain, `${why}: the Comments arrived at a different nesting depth`);
+    }
+  });
+
+  test('navigating away from a Watch Page leaves the Native Layout intact', async () => {
+    // Away from the Watch Page, by clicking the channel link under the video —
+    // YouTube's own link, so YouTube's router navigates.
+    await startFromKnownVideo();
+    await page.eval(`window.__forget()`);
+    const { left, nav } = await toChannel();
+    const gone = await page.eval(`(() => {
+      const root = document.documentElement;
+      return {
+        page: !!document.querySelector('ytd-browse, ytd-rich-grid-renderer'),
+        applied: root.dataset.ysc || null,
+        reason: root.dataset.yscReason || null,
+        inline: [root.style.getPropertyValue('--ysc-pane-width'), root.style.getPropertyValue('--ysc-pane-height')],
+        ours: [...document.querySelectorAll('body *')].filter((e) =>
+          (e.id || '').includes('ysc') || [...e.attributes].some((a) => a.name.includes('ysc'))).length,
+      };
+    })()`);
+    gone.nav = nav;
+    // In-page, not a reload — which is what the navigation record still being
+    // here says: a full document load would have taken it, and with it the
+    // extension, and this test would be asserting nothing about navigation at
+    // all. It is asserted first, because it decides what the rest is worth.
+    // (`finish` is deliberately not required: measured, YouTube fires its
+    // page-ready event for most navigations and not for all of them, so an
+    // absent one says nothing about whether the page was loaded or navigated.)
+    assert.ok(
+      gone.nav && gone.nav.start > 0,
+      `${left} was loaded rather than navigated to — ${JSON.stringify(gone.nav)}`,
+    );
+    assert.equal(gone.page, true, 'the page that arrived is not a YouTube page');
+    assert.equal(gone.applied, null, 'the layout attribute is still on a page that is not a Watch Page');
+    assert.deepEqual(gone.inline, ['', ''], 'the extension left its own properties on the root');
+    assert.equal(gone.ours, 0, 'the extension left something of its own in the page');
+    assert.equal(gone.reason, 'not-watch-page', 'the Step Aside was not recorded for a page that is not a Watch Page');
+
+    // And back again, to a Watch Page entered from a page that is not one.
+    const back = await hopFromChannel();
+    assertArranged(back, 'arriving at a Watch Page from a page that is not one');
+    assertTornDownFirst(back, 'arriving at a Watch Page from a page that is not one');
+    assert.ok(back.threads > 0, 'the Comments did not load on the Watch Page arrived at from a page that is not one');
+    assert.ok(back.firstOnScreen, 'the first comment thread is not visible in the Comment Pane');
+  });
+
+  test('a Watch Page opened in a background tab is arranged when the tab is shown', async () => {
+    // A tab that is not on screen is not rendered, and this is the category's
+    // most repeated complaint: a link opened in a background tab whose Comment
+    // Pane never appears until a refresh. Opening a tab makes it the active
+    // one, so the tab under test is created first and the page already loaded
+    // is brought back in front of it, leaving the new one in the background.
+    // Read while the page is still on screen and arranged, so the comparison is
+    // with the width a reader had actually chosen.
+    const chosen = (await arrangement()).width;
+    const hidden = await newPage(browser, null);
+    try {
+      await page.send('Page.bringToFront');
+      const state = await hidden.eval(`document.visibilityState`);
+      assert.equal(state, 'hidden', 'the tab under test is not in the background, so it tests nothing about one');
+
+      await hidden.send('Page.navigate', { url: WATCH_URL });
+      await hidden.waitFor(`!!document.querySelector('#primary')`, 'the background Watch Page to build', 90_000);
+      // What the extension made of the page *while nobody was looking* is
+      // recorded rather than asserted: what a reader is owed is the layout when
+      // they look at the tab, not that a tab nobody has looked at has one.
+      await sleep(4000);
+      const background = await hidden.eval(`({
+        applied: document.documentElement.dataset.ysc || null,
+        reason: document.documentElement.dataset.yscReason || null,
+        comments: (document.querySelector('#comments')?.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 40),
+      })`);
+
+      await hidden.send('Page.bringToFront');
+      const shown = await poll(
+        `document.documentElement.dataset.ysc === 'on' &&
+          !!document.querySelector('#ysc-pane ytd-comment-thread-renderer')`,
+        90_000,
+      );
+      assert.ok(
+        shown,
+        `the Comment Pane never appeared on a Watch Page that was opened in the background — while ` +
+          `hidden it was ${JSON.stringify(background)}, and shown it is ${await hidden.eval(`JSON.stringify({
+            href: location.href, ready: document.readyState,
+            applied: document.documentElement.dataset.ysc || null,
+            reason: document.documentElement.dataset.yscReason || null,
+            built: !!document.querySelector('#primary'),
+            pane: !!document.getElementById('ysc-pane'),
+          })`).catch(() => null)}`,
+      );
+      const r = await arrangement(hidden);
+      assertArranged(r, `a Watch Page opened in a background tab, hidden as ${JSON.stringify(background)}`);
+      assert.ok(r.threads > 0, 'the Comments did not load into the background tab’s Comment Pane');
+      assert.ok(
+        chosen > 320 && r.width === chosen,
+        `the background tab opened at ${r.width}px, not the ${chosen}px the preference was left at`,
+      );
+    } finally {
+      // Left as it was found whether or not the tab behaved: the tests after
+      // this one are not run in a tab that is itself in the background, and not
+      // on a video the recommendations happened to offer — one of which can be a
+      // live stream, whose live chat takes precedence over the Step Aside they
+      // are there to check.
+      hidden.close();
+      await page.send('Page.bringToFront');
+      await startFromKnownVideo();
+    }
   });
 
   test('a video YouTube delivers no comments for Steps Aside, leaving no empty Pane', async () => {
