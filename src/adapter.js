@@ -35,6 +35,15 @@ const COMMENTS = '#comments';
  */
 const RELATED = '#related';
 
+/**
+ * YouTube's own box for the Player — the column the layout gives it, controls
+ * and video surface together. Read to find out how much of the columns'
+ * container is spent on something neither column gets, which is the only way to
+ * know how wide the Pane can become before the Player falls under the width it
+ * was measured safe at.
+ */
+const PLAYER = '#player';
+
 /** YouTube's own mode flags, all carried by the watch root. */
 const THEATER = 'theater';
 const TWO_COLUMNS = 'is-two-columns_';
@@ -359,6 +368,29 @@ export function createAdapter(doc, { splitter, toggle } = {}) {
     return page?.primary.parentElement?.clientWidth || doc.documentElement.clientWidth;
   }
 
+  /**
+   * What that container spends on something that is neither column: the gutter
+   * between the Player and the Pane, and the page's own margin around the two.
+   *
+   * Measured rather than assumed, because it is YouTube's chrome and a number of
+   * ours would be wrong the day it lays the columns out differently. It is read
+   * as a remainder — the container, less the Player's box, less the rail's
+   * content, which is the Pane's own width once the layout is on — so every
+   * inset is counted by one subtraction rather than named, and the reading is
+   * the same before the layout is applied as after it: the padding that makes
+   * it up is the page's own and we never touch it.
+   *
+   * A page that cannot say — no Player box to measure against, or a remainder
+   * that came back as nothing — reports no chrome, which is the ceiling as it
+   * stood before any of this was measured.
+   */
+  function columnChrome(page = locate()) {
+    const player = doc.querySelector(PLAYER);
+    if (!page || !player) return 0;
+    const spent = containerWidth(page) - player.getBoundingClientRect().width - page.rail.clientWidth;
+    return spent > 0 ? spent : 0;
+  }
+
   function readState(prefs) {
     const page = locate();
     const root = watchRoot(page);
@@ -366,7 +398,11 @@ export function createAdapter(doc, { splitter, toggle } = {}) {
     // region itself, whatever YouTube has decided to put in it.
     const comments = doc.querySelector(COMMENTS);
     return {
-      viewport: { width: doc.documentElement.clientWidth, container: containerWidth(page) },
+      viewport: {
+        width: doc.documentElement.clientWidth,
+        container: containerWidth(page),
+        chrome: columnChrome(page),
+      },
       page: {
         isWatchPage: doc.location.pathname === '/watch',
         isShorts: doc.location.pathname.startsWith('/shorts'),
@@ -642,6 +678,7 @@ export function createAdapter(doc, { splitter, toggle } = {}) {
     /** The width the Pane is actually at, which is what a gesture starts from. */
     paneWidth: () => appliedWidth,
     containerWidth,
+    columnChrome,
   };
 }
 

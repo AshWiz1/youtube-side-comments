@@ -48,8 +48,9 @@
   const splitter = createSplitter({
     doc: document,
     // Pointer and keyboard both resolve through the engine's own clamp — the
-    // same function `decide` uses — so the two cannot disagree about the limits.
-    resolve: (requested) => resolvePaneWidth(requested, adapter.containerWidth()),
+    // same function `decide` uses, given the same two measurements — so the two
+    // cannot disagree about the limits.
+    resolve: (requested) => resolvePaneWidth(requested, adapter.containerWidth(), adapter.columnChrome()),
     getWidth: () => adapter.paneWidth(),
     onResize: (width) => {
       // Kept in step with the Pane as it moves, so a re-decide mid-drag agrees

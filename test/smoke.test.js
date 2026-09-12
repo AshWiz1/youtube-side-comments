@@ -879,6 +879,13 @@ describe('Comment Pane on a real Watch Page', { skip: SKIP }, () => {
       splitter: box(document.querySelector('#ysc-splitter')),
       // The box the ceiling is a fraction of, measured the way the Adapter does.
       container: document.querySelector('#primary').parentElement.clientWidth,
+      // And what that box spends on neither column, measured the same way: the
+      // gutter between the Player and the Pane, and the page's own margin.
+      chrome: +(
+        document.querySelector('#primary').parentElement.clientWidth -
+        document.querySelector('#player').getBoundingClientRect().width -
+        document.querySelector('#secondary-inner').clientWidth
+      ).toFixed(1),
       applied: parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--ysc-pane-width')),
     };
   })()`);
@@ -1071,6 +1078,81 @@ describe('Comment Pane on a real Watch Page', { skip: SKIP }, () => {
     assert.notEqual(focused.mark, hovered.mark, 'focusing the Splitter looks the same as hovering it');
   });
 
+  /** The Pane's top, the Splitter's top and the Player's, at one scroll offset,
+   *  read in one frame: what the page scrolled under is the Player's number. */
+  const atScroll = async (y) => {
+    await page.eval(`window.scrollTo(0, ${y})`);
+    await sleep(200);
+    return page.eval(`(() => {
+      const t = (s) => { const e = document.querySelector(s); return e ? +e.getBoundingClientRect().top.toFixed(1) : null; };
+      const pane = document.querySelector('#ysc-pane');
+      return { y: Math.round(window.scrollY), player: t('#player'), pane: t('#ysc-pane'),
+        splitter: t('#ysc-splitter'), paneHeight: +pane.getBoundingClientRect().height.toFixed(1),
+        railBottom: +document.querySelector('#secondary-inner').getBoundingClientRect().bottom.toFixed(1),
+        sticky: parseFloat(getComputedStyle(pane).top) || 0 };
+    })()`);
+  };
+
+  test('the Pane is pinned while the page scrolls under it, and the Splitter stays with it', async () => {
+    const rest = await atScroll(0);
+    // How far the Pane can be pinned at all: until its own bottom reaches the
+    // end of the rail it is pinned inside, which is where the Recommendation
+    // Strip begins. That is the description's own height, so a page with a
+    // longer one pins the Pane for longer.
+    const travel = Math.round(rest.railBottom - rest.sticky - rest.paneHeight);
+    assert.ok(travel > 100, `the rail gives the Pane only ${travel}px to be pinned in`);
+
+    const down = await atScroll(Math.min(200, travel - 20));
+    // The page moved under it — the Player went down by exactly what was
+    // scrolled — and the Pane did not: it is held at its sticky top rather than
+    // travelling with the page, which is what it did before this was fixed.
+    assert.ok(
+      Math.abs(down.player - (rest.player - down.y)) <= 1,
+      `the page did not scroll: the Player is at ${down.player} for a scroll of ${down.y}`,
+    );
+    assert.equal(down.pane, down.sticky, `the Pane was at ${down.pane} rather than held at ${down.sticky}`);
+    assert.ok(down.splitter === down.pane, `the Splitter is at ${down.splitter}, the Pane at ${down.pane}`);
+
+    // Past the end of the rail both travel with the page, together — the Splitter
+    // is pinned by the rail's own arithmetic, not by a rule of its own.
+    const past = await atScroll(travel + 400);
+    assert.ok(past.pane < past.sticky, 'the Pane is still pinned past the end of the rail it is pinned in');
+    assert.ok(past.splitter === past.pane, `the Splitter is at ${past.splitter}, the Pane at ${past.pane}`);
+    // Scrolling back leaves the Pane exactly where it started, so nothing of
+    // the pinning is left behind in the page's own layout.
+    const back = await atScroll(0);
+    assert.ok(Math.abs(back.pane - rest.pane) <= 1, `the Pane came back to ${back.pane}, not ${rest.pane}`);
+    assert.ok(back.splitter === back.pane, 'the Splitter came back somewhere else than the Pane');
+  });
+
+  test('a drag is the page reflowing, not the Splitter working', async () => {
+    // The same twelve width changes a drag writes, alone and then with the
+    // page's own layout forced after each: the first is what the Splitter
+    // spends, the second is what the page spends answering a width that
+    // changed. Twelve writes are what the drag passes through in a gesture.
+    const r = await page.eval(`(() => {
+      const root = document.documentElement;
+      const was = root.style.getPropertyValue('--ysc-pane-width');
+      const at = (i) => (402 + i * 10) + 'px';
+      let t = performance.now();
+      for (let i = 0; i < 12; i++) root.style.setProperty('--ysc-pane-width', at(i));
+      const writes = performance.now() - t;
+      t = performance.now();
+      for (let i = 0; i < 12; i++) { root.style.setProperty('--ysc-pane-width', at(i)); void root.offsetWidth; }
+      const relayout = performance.now() - t;
+      // The width the page had, put back: this measures the cost, it does not
+      // choose a width.
+      root.style.setProperty('--ysc-pane-width', was);
+      void root.offsetWidth;
+      return { writes: +writes.toFixed(2), relayout: +relayout.toFixed(2) };
+    })()`);
+    assert.ok(
+      r.writes * 10 < r.relayout,
+      `twelve width changes cost the Splitter ${r.writes}ms and the page's own relayout ${r.relayout}ms` +
+        ' — the Splitter is paying for something that is not its work',
+    );
+  });
+
   test('dragging the Splitter resizes the Comment Pane and the Player keeps up', async () => {
     const before = await splitterGeometry();
     const delta = 240;
@@ -1139,7 +1221,7 @@ describe('Comment Pane on a real Watch Page', { skip: SKIP }, () => {
     await dragSplitter(start.pane.left);
     await waitForResync();
     const wide = await splitterGeometry();
-    const ceiling = Math.min(start.container * 0.6, start.container - 480);
+    const ceiling = Math.min(start.container * 0.6, start.container - start.chrome - 480);
     assert.ok(
       Math.abs(wide.applied - ceiling) <= 1,
       `the Pane stopped at ${wide.applied}px, not the ${ceiling}px ceiling`,
@@ -1169,6 +1251,49 @@ describe('Comment Pane on a real Watch Page', { skip: SKIP }, () => {
 
     await clickSplitter(2); // leave the Pane at its default for what follows
     await waitForResync();
+  });
+
+  test('where the container − Player term sets the ceiling, the Player keeps its measured width', async () => {
+    // A window narrow enough that the term, and not 60% of the container, is
+    // the smaller one — which on the 1889px container above it is not, so this
+    // is the only place the two can be told apart. The Strip's own box is what
+    // says the page has laid itself out again.
+    await page.send('Emulation.setDeviceMetricsOverride', {
+      width: NARROW_VIEWPORT, height: 1080, deviceScaleFactor: 1, mobile: false,
+    });
+    await page.waitFor(
+      `(() => { const s = document.getElementById('ysc-strip'); return !!s && s.getBoundingClientRect().width < ${NARROW_STRIP}; })()`,
+      'a container the second term binds in',
+      15_000,
+    );
+    await sleep(500);
+    const before = await splitterGeometry();
+    // Short of the window's edge, so the pointer stays inside it: the request is
+    // already far past the ceiling either way.
+    await dragSplitter(Math.round(before.pane.left) - 20);
+    await waitForResync();
+    const at = await splitterGeometry();
+    assert.ok(
+      at.applied < before.container * 0.6,
+      `60% of the ${before.container}px container was the smaller term after all, at ${at.applied}px`,
+    );
+    // The whole point of the term: the Player's column, chrome and all, is what
+    // is held at the width it was measured safe at — not the container, which
+    // would have left it the 48px the page spends around the columns short.
+    assert.ok(
+      Math.abs(at.frame.width - 480) <= 1,
+      `the ceiling left the Player ${at.frame.width}px, not the measured-safe 480px`,
+    );
+
+    await page.send('Emulation.clearDeviceMetricsOverride');
+    await page.waitFor(
+      `(() => { const s = document.getElementById('ysc-strip'); return !!s && s.getBoundingClientRect().width > ${NARROW_STRIP}; })()`,
+      'the window it had',
+      15_000,
+    );
+    await clickSplitter(2);
+    await waitForResync();
+    assert.equal((await splitterGeometry()).applied, 402, 'the width did not come back to the default with the window');
   });
 
   test('the arrow keys move the Splitter, and double-click puts it back', async () => {
@@ -1324,6 +1449,16 @@ describe('Comment Pane on a real Watch Page', { skip: SKIP }, () => {
         .filter(({ r }) => r.width > 0 && r.right > root.clientWidth + 0.5)
         .sort((a, b) => b.r.right - a.r.right).slice(0, 3)
         .map(({ e, r }) => sig(e) + ' ' + Math.round(r.left) + '-' + Math.round(r.right) + ' in ' + sig(e.parentElement)),
+      // The boxes the offender list above cannot see, which is where a
+      // sideways scroll measured with nothing named has to be coming from: the
+      // root and the body themselves, and the width the page is laid out
+      // against. Read in the same frame as the number they explain.
+      widths: {
+        inner: innerWidth, client: root.clientWidth, scroll: root.scrollWidth,
+        root: box(root)?.width ?? null, body: box(document.body)?.width ?? null,
+        columns: box(document.querySelector('#columns'))?.width ?? null,
+        rail: box(document.querySelector('#secondary'))?.width ?? null,
+      },
       // The chain the Comments sit at, so a drift in nesting depth or in the
       // container they were moved into cannot pass unnoticed.
       chain: chain(comments && comments.parentElement).join('<'),
@@ -1357,7 +1492,7 @@ describe('Comment Pane on a real Watch Page', { skip: SKIP }, () => {
   const assertArranged = (r, why) => {
     const at = `${why} — ${JSON.stringify({
       video: r.video, reason: r.reason, counts: r.counts, chain: r.chain, relateds: r.relateds,
-      scrollTop: r.scrollTop, scrollY: r.scrollY, firstThread: r.firstThread,
+      scrollTop: r.scrollTop, scrollY: r.scrollY, firstThread: r.firstThread, widths: r.widths,
     })}`;
     assert.equal(r.applied, 'on', `the layout is not applied (${at})`);
     assert.equal(r.reason, null, `the extension Stepped Aside (${at})`);

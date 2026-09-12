@@ -103,9 +103,9 @@ export const MAX_PANE_FRACTION = 0.6;
  * YouTube's signal is the authority on where two columns stop working, and it
  * collapses at a wider viewport than this.
  *
- * The same sum is the ceiling's second term, which is not a coincidence: where
- * the container is too small for both, the two clamps meet and the layout has
- * already Stepped Aside.
+ * The same sum, plus whatever the container spends around the columns, is the
+ * ceiling's second term, which is not a coincidence: where the container is too
+ * small for both, the two clamps meet and the layout has already Stepped Aside.
  */
 export const MIN_TWO_COLUMN_VIEWPORT = MIN_PANE_WIDTH + MIN_PLAYER_WIDTH;
 
@@ -126,10 +126,12 @@ export const MIN_TWO_COLUMN_VIEWPORT = MIN_PANE_WIDTH + MIN_PLAYER_WIDTH;
  * honest.
  *
  * @param {object} state
- * @param {{width: number, container?: number}} state.viewport  `width` is the
- *   viewport; `container` is the box the Player and the Comment Pane share,
- *   which the width ceiling is a fraction of. A page that cannot say how wide
- *   that box is falls back to the viewport, which is what it usually equals.
+ * @param {{width: number, container?: number, chrome?: number}} state.viewport
+ *   `width` is the viewport; `container` is the box the Player and the Comment
+ *   Pane share, which the width ceiling is a fraction of; `chrome` is what that
+ *   box spends on neither of them. A page that cannot say how wide the box is
+ *   falls back to the viewport, which is what it usually equals, and one that
+ *   cannot say what the box spends leaves the ceiling where it was.
  * @param {object} state.page               What the page actually is.
  * @param {object} state.prefs              The user's stored preferences.
  * @returns {{action: string, reason?: string, paneWidth?: number, placement?: object}}
@@ -181,7 +183,11 @@ export function decide({ viewport, page, prefs }) {
 
   return {
     action: ACTION.APPLY,
-    paneWidth: resolvePaneWidth(prefs.paneWidth, viewport.container ?? viewport.width),
+    paneWidth: resolvePaneWidth(
+      prefs.paneWidth,
+      viewport.container ?? viewport.width,
+      viewport.chrome,
+    ),
     // The Comments go beside the Player and the Recommendation Strip goes below
     // the two of them, whichever they are: the placement is a fact about the
     // layout, so no page state — width, columns, rail occupancy — can move one
@@ -271,20 +277,32 @@ export function needsArranging(last, decision) {
  *
  * @param {number} requested  The width asked for, in pixels.
  * @param {number} container  The width the Player and the Pane share.
+ * @param {number} [chrome]   What that width spends on neither of them, which
+ *   the ceiling leaves to them before it divides the rest.
  */
-export function resolvePaneWidth(requested, container) {
+export function resolvePaneWidth(requested, container, chrome = 0) {
   const wanted = usable(requested) ? requested : DEFAULT_PANE_WIDTH;
-  return Math.min(Math.max(wanted, MIN_PANE_WIDTH), paneCeiling(container));
+  return Math.min(Math.max(wanted, MIN_PANE_WIDTH), paneCeiling(container, chrome));
 }
 
 /**
  * The widest the Comment Pane may become: **the lesser of 60% of the container
- * and the container minus the narrowest measured Player**.
+ * and the container minus the chrome around the columns minus the narrowest
+ * measured Player**.
  *
  * The second term is the one that keeps the layout out of territory we never
  * measured — Player widths below 480px — and it binds for any container under
- * 1200px. The two terms cross at 800px, which is also the viewport our own
- * guard Steps Aside on.
+ * 1200px, or under 1320px once the chrome is counted. Where the container is
+ * small enough that both terms fall under the floor, the two clamps meet at
+ * `MIN_TWO_COLUMN_VIEWPORT` of container plus the chrome — which is the viewport
+ * our own guard Steps Aside on, near enough that the two land together.
+ *
+ * `chrome` is what the container spends on something that is neither column:
+ * the gutter between them and the page's own margin around them. It has to come
+ * off before the Player's share is worked out, or the term promises the Player
+ * a width the page then takes the chrome out of — measured on a live Watch
+ * Page, the Player's column ends up 48px narrower than this term intended,
+ * which is what put its ceiling inside the band we never measured.
  *
  * Where a container is small enough for the ceiling to fall under the floor the
  * **floor wins**, because the floor is the rail's own `min-width`: a Pane
@@ -292,14 +310,19 @@ export function resolvePaneWidth(requested, container) {
  * Player narrower than we have measured, on a page where YouTube still calls
  * itself two columns — which is a page we applied on before this clamp existed,
  * and applied on with less to spare.
+ *
+ * @param {number} container  The box the Player and the Comment Pane share.
+ * @param {number} [chrome]   What that box spends on neither of them. A page
+ *   that cannot measure it constrains the ceiling as the page itself does not.
  */
-export function paneCeiling(container) {
+export function paneCeiling(container, chrome = 0) {
   // No container to divide is no ceiling to apply; the floor and the default
   // still hold, since neither depends on the page.
   if (!usable(container)) return Infinity;
+  const spent = usable(chrome) ? chrome : 0;
   return Math.max(
     MIN_PANE_WIDTH,
-    Math.min(container * MAX_PANE_FRACTION, container - MIN_PLAYER_WIDTH),
+    Math.min(container * MAX_PANE_FRACTION, container - spent - MIN_PLAYER_WIDTH),
   );
 }
 

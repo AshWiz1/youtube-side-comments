@@ -134,21 +134,45 @@ html[data-ysc='on'] #ysc-status-panel #ysc-off:focus-visible {
 }
 
 /* The Splitter is the gutter between the columns, so it costs the Player and
-   the Pane no width between them; it is as tall as the Pane it resizes. */
+   the Pane no width between them; it is as tall as the Pane it resizes.
+
+   Filling the rail's own column is what the Pane's stickiness is made of, and
+   the rail does not fill it on its own: YouTube's `#secondary-inner` is as tall
+   as what it holds, and what it holds is the Pane. A sticky box has no travel
+   inside a containing block it already fills, so the Pane was not pinned at
+   all — measured, its top tracked the Player's exactly at every scroll offset
+   (68 → −232 → −1132). Stretched to the column, the Pane pins under the
+   masthead and stays there until its bottom reaches the end of the rail, which
+   is where the Recommendation Strip begins. `100%` is the rail's own column,
+   which is as tall as the Player's — the two are the same flex row. */
 html[data-ysc='on'] #secondary-inner {
   position: relative;
+  min-height: 100%;
 }
 /* In the gap and no wider than it, so nothing under the Splitter is a control
    a reader cannot reach: the Comments' own left edge is the Pane's, and a grab
    area reaching into the Pane is the first few pixels of the thread taken away
    from whoever is trying to read it. The gutter is 16px and this is 12 of it,
-   which is a comfortable target to grab without covering either column. */
+   which is a comfortable target to grab without covering either column.
+
+   A **float** because it has to be out of the flow and sticky at once: sticky
+   is what keeps it on the Pane's edge once the reader has scrolled, and a
+   floated box takes no line in the column, so the Pane still begins where the
+   rail's content does rather than a Pane's height below it. Its sticky
+   containing block, its static position and its height are then the Pane's
+   exactly, so the two are pinned by the same arithmetic and cannot separate —
+   which is the whole of what this rule is for. The negative margin is the other
+   half: it sits in the rail's padding, outside the box it resizes. */
 html[data-ysc='on'] #ysc-splitter {
-  position: absolute;
-  top: 0;
-  left: -12px;
+  position: sticky;
+  /* The same top the Pane is held at, from the same property, so one rule
+     cannot move without the other. */
+  top: var(--ytd-watch-flexy-masthead-height, 56px);
+  float: left;
   width: 12px;
-  height: var(--ysc-pane-height);
+  /* Capped as the Pane is capped, so the two are never different heights. */
+  height: min(var(--ysc-pane-height), var(--ysc-pane-limit));
+  margin-left: -12px;
   z-index: 60;
   cursor: col-resize;
   /* Without this a touch drag arrives as a scroll and never becomes a gesture. */

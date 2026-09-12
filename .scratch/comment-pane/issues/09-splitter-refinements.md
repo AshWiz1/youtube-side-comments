@@ -10,10 +10,10 @@
 
 **Status:** ready-for-agent
 
-- [ ] The Splitter and the Comment Pane stay together when the reader scrolls into the Comments.
-- [ ] A drag follows the pointer at the display's refresh rate rather than the page's reflow rate — or the cost is shown not to be the Splitter's to pay.
-- [ ] Where the `container − player minimum` term sets the ceiling, the Player's column stays at or above the measured-safe width.
-- [ ] No regression in the drag, clamp, keyboard, reset or persistence behaviour ticket 03 verified, including its real-pointer-input smoke tests.
+- [x] The Splitter and the Comment Pane stay together when the reader scrolls into the Comments.
+- [x] A drag follows the pointer at the display's refresh rate rather than the page's reflow rate — or the cost is shown not to be the Splitter's to pay.
+- [x] Where the `container − player minimum` term sets the ceiling, the Player's column stays at or above the measured-safe width.
+- [x] No regression in the drag, clamp, keyboard, reset or persistence behaviour ticket 03 verified, including its real-pointer-input smoke tests.
 
 ## Comments
 

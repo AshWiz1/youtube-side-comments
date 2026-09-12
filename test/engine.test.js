@@ -195,28 +195,46 @@ const widths = [
   // viewport the engine Steps Aside on, so this is a decision, not a dead end.
   [9999, MIN_TWO_COLUMN_VIEWPORT, MIN_PANE_WIDTH],
   [9999, 700, MIN_PANE_WIDTH],
+  // What the container spends on neither column — the gutter and the page's own
+  // margin — is spent before the Player's share is worked out, so the second
+  // term leaves the Player its measured width and not 48px less than it.
+  [9999, 1000, 472, 48],
+  [9999, 1200, 672, 48],
+  [9999, 1199, 671, 48],
+  // A chrome is not a share: where 60% of the container is the smaller term,
+  // what the container spends around the columns moves nothing.
+  [9999, 2000, 1200, 48],
+  // A chrome that isn't a measurement constrains nothing.
+  [9999, 1000, 520, 0],
+  [9999, 1000, 520, NaN],
+  [9999, 1000, 520, -48],
+  [9999, 1000, 520, undefined],
 ];
-for (const [requested, container, expected] of widths) {
+for (const [requested, container, expected, chrome = 0] of widths) {
   test(`width: ${String(requested)} in a ${container}px container -> ${expected}`, () => {
     assert.equal(
-      decide(state({ prefs: { paneWidth: requested }, viewport: { width: container, container } })).paneWidth,
+      decide(
+        state({ prefs: { paneWidth: requested }, viewport: { width: container, container, chrome } }),
+      ).paneWidth,
       expected,
     );
   });
 }
 
-// The same rules, reached the way the Splitter reaches them. One function, so
-// the pointer and the keyboard cannot resolve a width differently.
+// The same rules, reached the way the Splitter reaches them, given the same two
+// measurements the Adapter hands `decide`. One function, so the pointer and the
+// keyboard cannot resolve a width differently — or differently from a decision.
 const resolutions = [
-  [402, 2000, 402],
-  [1180, 2000, 1180],
-  [1470, 2000, 1200],
-  [9999, 2000, 1200],
-  [10, 2000, 320],
+  [402, 2000, 0, 402],
+  [1180, 2000, 0, 1180],
+  [1470, 2000, 0, 1200],
+  [9999, 2000, 0, 1200],
+  [10, 2000, 0, 320],
+  [9999, 1000, 48, 472],
 ];
-for (const [requested, container, expected] of resolutions) {
+for (const [requested, container, chrome, expected] of resolutions) {
   test(`the Splitter resolves ${requested} in a ${container}px container to ${expected}`, () => {
-    assert.equal(resolvePaneWidth(requested, container), expected);
+    assert.equal(resolvePaneWidth(requested, container, chrome), expected);
   });
 }
 test('a container the page cannot measure leaves the floor and the default', () => {
@@ -234,6 +252,18 @@ test('the ceiling never undercuts the floor', () => {
 test('the second term is exactly the viewport the layout needs', () => {
   assert.equal(paneCeiling(MIN_TWO_COLUMN_VIEWPORT), MIN_PANE_WIDTH);
   assert.equal(MIN_TWO_COLUMN_VIEWPORT, MIN_PANE_WIDTH + MIN_PLAYER_WIDTH);
+  // With chrome around the columns, the container has to be that much wider
+  // again before the layout has the room it needs — which is the whole point of
+  // the term: the Player's **column**, not the container, is what is measured
+  // safe. Every container across the band where the term is the smaller one,
+  // and the column it leaves behind.
+  for (let container = MIN_TWO_COLUMN_VIEWPORT; container <= 1200; container++) {
+    const ceiling = paneCeiling(container, 48);
+    assert.ok(
+      container - 48 - ceiling >= MIN_PLAYER_WIDTH || ceiling === MIN_PANE_WIDTH,
+      `a ${container}px container clamps the Pane to ${ceiling}px, leaving the Player ${container - 48 - ceiling}px`,
+    );
+  }
 });
 
 // [how tall the Pane must be to end on the Strip, the viewport below its sticky
