@@ -127,17 +127,86 @@ html[data-ysc='on'] #ysc-strip ytd-item-section-renderer {
 /* The level that directly holds the cards becomes the grid. YouTube currently
    wraps them in an item section's `#contents`; a bare `#items` is the older
    shape. Whichever is in circulation, the columns belong on the level that
-   holds the items, not on the level that holds the list. */
+   holds the items, not on the level that holds the list.
+
+   Four to a row at the Strip's width and no more: measured at a 1889px Strip, a
+   380px floor gives four 452px cards, where the 320px floor it replaced gave
+   five of 359px — a rail's rows, laid out across a page. The floor is what makes
+   it four rather than a rule that says four, so a narrower viewport quietly
+   drops to three and then two instead of holding a count its width cannot
+   take. */
 html[data-ysc='on'] #ysc-strip ytd-item-section-renderer > #contents,
 html[data-ysc='on'] #ysc-strip #items:not(:has(> ytd-item-section-renderer)) {
   display: grid !important;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
   gap: 16px;
 }
 
+/* A card in the Strip is YouTube's own home-page tile: a thumbnail the width of
+   the column, the text beneath it. What the related list actually renders is the
+   *same* element — `yt-lockup-view-model`, holding the same view models — laid
+   out as a compact row, because a 360px rail wants a thumbnail beside the text
+   rather than above it. The three rules below are that difference and nothing
+   else, taken from YouTube's own stylesheet (`ytLockupViewModelVertical` against
+   `ytLockupViewModelHorizontal`, which is what the home page and the rail choose
+   between): a column instead of a row, the thumbnail taking the column instead
+   of the 62.5% YouTube writes inline for the row, and the text no longer asked
+   to fill what is left.
+
+   Written here rather than as attributes on the elements so that the shape is
+   the layout's, not a change we made to a page: it arrives with the Strip's
+   attribute and leaves with it, and the continuation pages YouTube appends
+   later are tiles without anything having to visit them. */
+html[data-ysc='on'] #ysc-strip yt-lockup-view-model > .ytLockupViewModelHost {
+  flex-direction: column !important;
+}
+html[data-ysc='on'] #ysc-strip yt-lockup-view-model > .ytLockupViewModelHost > .ytLockupViewModelContentImage {
+  width: 100% !important;
+  max-width: none !important;
+  padding-right: 0 !important;
+  padding-bottom: 12px !important;
+  display: block !important;
+}
+html[data-ysc='on'] #ysc-strip yt-lockup-view-model > .ytLockupViewModelHost > .ytLockupViewModelMetadata {
+  flex: 0 0 auto !important;
+}
+
+/* A Short is a card in this grid like any other, and in this list it arrives as
+   one: measured on a related list holding thirteen of them, a Short is a
+   `yt-lockup-view-model` whose link goes to `/shorts/` and whose thumbnail is
+   the same 16:9 box as its neighbours, with YouTube's own "Shorts" badge on it.
+   Nothing about it is vertical, and nothing about it needs a rule of its own —
+   the tile rules above are the whole of what makes it a card.
+
+   These three are for the vertical Shorts card YouTube draws elsewhere (its
+   Shorts tab: `ytm-shorts-lockup-view-model`, a 2:3 thumbnail, nearly three
+   times the height of the tiles beside it). If one is ever served in this list,
+   it is held to the Strip's own shape rather than the Strip's rows being held to
+   it — the thumbnail cropped to 16:9 as YouTube crops it everywhere else it
+   shows a Short in a 16:9 slot. The classes are YouTube's, read from its own
+   stylesheet; absent, these say nothing. */
+html[data-ysc='on'] #ysc-strip .shortsLockupViewModelHost {
+  width: 100% !important;
+}
+html[data-ysc='on'] #ysc-strip .shortsLockupViewModelHostThumbnailContainer::before,
+html[data-ysc='on'] #ysc-strip .ytThumbnailViewModelAspectRatio2By3,
+html[data-ysc='on'] #ysc-strip .ytThumbnailViewModelAspectRatio9By16,
+html[data-ysc='on'] #ysc-strip .ytThumbnailViewModelShortsAspectRatio9By16 {
+  padding-top: 56.25% !important;
+}
+
 /* Loading the next page of related videos is the list's footer, not a card, so
-   it spans the row instead of sitting in a column of its own. */
-html[data-ysc='on'] #ysc-strip ytd-continuation-item-renderer {
+   it spans the row instead of sitting in a column of its own. A section or a
+   shelf of its own inside the list — a group of Shorts, most of all — takes the
+   row for the same reason: held to one column it would be laid out for a cell a
+   quarter of its width, and its own items would stack down it one to a row. It
+   spans, and the items inside it are laid out by the same grid as everything
+   around them. Measured at a 1889px Strip with a section placed in it: spanning,
+   its own contents take the Strip's four columns; held to a column, one. No
+   related list measured served its Shorts this way — a Short there was an
+   ordinary card — so this is a guard for a shape, not a repair of one seen. */
+html[data-ysc='on'] #ysc-strip ytd-continuation-item-renderer,
+html[data-ysc='on'] #ysc-strip #contents > :is(ytd-item-section-renderer, ytd-reel-shelf-renderer) {
   grid-column: 1 / -1;
 }
 

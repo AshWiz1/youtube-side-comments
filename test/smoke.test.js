@@ -28,6 +28,14 @@ const WATCH_URL = process.env.YSC_SMOKE_URL || 'https://www.youtube.com/watch?v=
  *  the width is a preference rather than a fact about one video. */
 const OTHER_URL = process.env.YSC_SMOKE_URL_2 || 'https://www.youtube.com/watch?v=aqz-KE-bpKQ';
 
+/** A Watch Page whose related list serves **Shorts**. The Strip's own video
+ *  serves none — measured across the videos this suite uses, and across fifteen
+ *  others — so a rule about Shorts is only ever shown one here. Measured on this
+ *  page: thirteen of the list's cards link to `/shorts/`. Its own list is long
+ *  and builds as it is scrolled, so the Shorts on it are found by walking the
+ *  Strip down. */
+const SHORTS_URL = process.env.YSC_SMOKE_URL_SHORTS || 'https://www.youtube.com/watch?v=DLOUfAVwuXA';
+
 /** Shared in-page helpers. `onScreen` is the only real visibility test: a
  *  non-zero box can still be scrolled out of a clipping ancestor. */
 const PRELUDE = `
@@ -517,6 +525,20 @@ describe('Comment Pane on a real Watch Page', { skip: SKIP }, () => {
                bottom: +b.bottom.toFixed(1), width: +b.width.toFixed(1), height: +b.height.toFixed(1) }; };
     const strip = document.getElementById('ysc-strip');
     const cards = [...(strip?.querySelectorAll('${CARD}') || [])];
+    const drawn = cards.filter((c) => c.getBoundingClientRect().width > 0);
+    // A Short, by the one thing that says so: its own link goes to /shorts/.
+    // Measured on a related list holding thirteen of them — a Short there is the
+    // same lockup as every other card, with YouTube's own badge on it.
+    const shorts = cards.filter((c) => c.querySelector('a[href*="/shorts/"]'));
+    // Rows, by vertical overlap rather than by an equal top edge: an inline-block
+    // card sits a few pixels off the top of the row it is in.
+    const rows = [];
+    for (const c of [...drawn].sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top)) {
+      const b = c.getBoundingClientRect();
+      const row = rows.find((r) => Math.min(r.bottom, b.bottom) - Math.max(r.top, b.top) > 20);
+      if (row) { row.n++; row.bottom = Math.max(row.bottom, b.bottom); }
+      else rows.push({ top: b.top, bottom: b.bottom, n: 1 });
+    }
     return {
       strip: box(strip),
       player: box(document.querySelector('#player')),
@@ -525,9 +547,21 @@ describe('Comment Pane on a real Watch Page', { skip: SKIP }, () => {
       belowColumns: strip ? strip.getBoundingClientRect().top >= document.querySelector('#primary').getBoundingClientRect().bottom - 1 : false,
       cards: cards.length,
       card: box(cards[0]),
+      // What a card is made of: the thumbnail a tile carries above its text.
+      thumb: box(cards[0]?.querySelector('yt-thumbnail-view-model')),
       // One distinct left edge per column of the grid — and exactly one if the
       // list is still the rail's single, stretched column.
-      columns: new Set(cards.map((c) => Math.round(c.getBoundingClientRect().left))).size,
+      columns: new Set(drawn.map((c) => Math.round(c.getBoundingClientRect().left))).size,
+      // The rows that hold one card and nothing else, the list's own last row
+      // aside — a list simply ends, and where it ends is not a shape. Every
+      // other one is a card dictating a row of its own.
+      loneRows: rows.slice(0, -1).filter((r) => r.n === 1).length,
+      rows: rows.length,
+      shorts: shorts.length,
+      short: box(shorts[0]),
+      shortThumb: box(shorts[0]?.querySelector('yt-thumbnail-view-model')),
+      hiddenShorts: shorts.filter((c) => { const b = c.getBoundingClientRect();
+        return b.width < 1 || getComputedStyle(c).display === 'none' || getComputedStyle(c).visibility === 'hidden'; }).length,
       text: (cards[0]?.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 80),
       overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
       // Only so an overflow failure names the element rather than the number.
@@ -577,14 +611,26 @@ describe('Comment Pane on a real Watch Page', { skip: SKIP }, () => {
     const r = await stripGeometry();
     assert.ok(r.cards > 5, `only ${r.cards} related videos rendered in the Strip`);
     assert.ok(r.text.length > 10, `the first related video has no content: ${JSON.stringify(r.text)}`);
-    assert.ok(
-      r.columns >= 3,
-      `the related videos sit in ${r.columns} column(s) — the Strip reads as one stretched column, not a grid`,
+    // Four to a row at the wide viewport, and the card is a tile rather than a
+    // rail row: measured at a 1889px Strip, four columns of 452×374 with a
+    // 452×254 thumbnail above the text, where the 320px floor gave five of
+    // 359×134 with a 224px thumbnail beside it.
+    assert.equal(
+      r.columns,
+      4,
+      `the related videos sit in ${r.columns} column(s) of ${r.card?.width}px — four to a row is the Strip's width`,
     );
     assert.ok(
-      r.card.width < r.strip.width / 2,
-      `a related video is ${r.card.width}px wide inside a ${r.strip.width}px Strip`,
+      r.card.width > 420 && r.card.height > 300,
+      `a related video is ${r.card.width}×${r.card.height}, which is a rail row at page width, not a tile`,
     );
+    assert.ok(
+      r.thumb && Math.abs(r.thumb.width / r.thumb.height - 16 / 9) < 0.06 && Math.abs(r.thumb.width - r.card.width) <= 1,
+      `a tile's thumbnail is ${JSON.stringify(r.thumb)} in a ${JSON.stringify(r.card)} card — the tile is not a 16:9 thumbnail over its text`,
+    );
+    // No card has a row to itself: a card that arrives in a shape of its own
+    // would stretch every card beside it, and Shorts are the shape that does it.
+    assert.equal(r.loneRows, 0, `${r.loneRows} of ${r.rows} rows hold one card and nothing else`);
     assert.equal(r.overflow, 0, `the page scrolls sideways by ${r.overflow}px: ${JSON.stringify(r.widest)}`);
   });
 
@@ -602,8 +648,11 @@ describe('Comment Pane on a real Watch Page', { skip: SKIP }, () => {
     );
     const narrow = await stripGeometry();
     assert.ok(narrow.strip && narrow.strip.width < NARROW_STRIP, `no Strip at a narrow viewport: ${JSON.stringify(narrow.strip)}`);
+    // Three at 1280 rather than the four a wider window takes: a 1248px Strip
+    // holds three 380px columns and not four, which is the floor doing the
+    // deciding and not a count written down.
     assert.ok(
-      narrow.columns >= 2,
+      narrow.columns >= 3,
       `the Strip fell back to ${narrow.columns} column(s) at 1280px, which is the layout the Strip exists to avoid`,
     );
     assert.equal(narrow.overflow, 0, `the page scrolls sideways by ${narrow.overflow}px at 1280: ${JSON.stringify(narrow.widest)}`);
@@ -615,6 +664,55 @@ describe('Comment Pane on a real Watch Page', { skip: SKIP }, () => {
       'the Strip to take the wide viewport back',
       15_000,
     );
+  });
+
+  test('Shorts in the Strip are cards among the others, not rows of their own', async (t) => {
+    // A fixture of its own, because the Strip's video serves no Shorts and a rule
+    // about Shorts that is never shown one asserts nothing. This one held
+    // thirteen among its list's cards when it was measured, every one of them a
+    // `yt-lockup-view-model` whose link goes to /shorts/ — the same element as
+    // every other card, with YouTube's own "Shorts" badge on it.
+    await page.send('Page.navigate', { url: SHORTS_URL });
+    await page.waitFor(
+      `!!document.querySelector('#ysc-pane ytd-comment-thread-renderer')`,
+      'a Watch Page whose related list serves Shorts',
+      90_000,
+    );
+    // The list builds as it is scrolled down, so the Shorts further along it only
+    // exist once the Strip has been walked. A tile is 374px of a column now, so
+    // the walk is in steps of a row and a half.
+    for (let i = 0; i < 8; i++) {
+      await page.eval(`(() => { const s = document.getElementById('ysc-strip');
+        if (s) scrollTo(0, s.getBoundingClientRect().top + scrollY + ${i} * 1200); return true; })()`);
+      await sleep(1000);
+    }
+    await page.eval(`scrollTo(0, 0)`);
+    await sleep(1000);
+
+    const r = await stripGeometry();
+    assert.ok(r.cards > 5, `only ${r.cards} related videos rendered in the Strip`);
+    assert.equal(r.overflow, 0, `the page scrolls sideways by ${r.overflow}px: ${JSON.stringify(r.widest)}`);
+    // The criterion, measured on whatever the page serves: no card holds a row on
+    // its own — the list's own last row aside, which is short because the list
+    // ended there. Every page this suite loads is measured this way, so a Short
+    // that arrives in a shape of its own fails the same assertion wherever it is.
+    assert.equal(r.loneRows, 0, `${r.loneRows} of ${r.rows} rows hold one card and nothing else`);
+    t.diagnostic(`${r.shorts} of ${r.cards} related cards are Shorts, in ${r.rows} rows`);
+
+    if (r.shorts) {
+      assert.equal(r.hiddenShorts, 0, 'a Short in the Strip was hidden rather than laid out');
+      // A Short is a card like its neighbours: the same column, the same tile,
+      // its thumbnail the same 16:9 box — cropped, as YouTube crops one wherever
+      // it shows a Short in a 16:9 slot, rather than stretched to a row's height.
+      assert.ok(
+        Math.abs(r.short.width - r.card.width) <= 1 && r.short.height > 300,
+        `a Short is ${r.short.width}×${r.short.height} against a ${r.card.width}×${r.card.height} card`,
+      );
+      assert.ok(
+        r.shortThumb && Math.abs(r.shortThumb.width / r.shortThumb.height - 16 / 9) < 0.06,
+        `a Short's thumbnail is ${JSON.stringify(r.shortThumb)} — not the 16:9 box its row is built from`,
+      );
+    }
   });
 
   test('theater mode Steps Aside and restores the Native Layout exactly', async () => {
