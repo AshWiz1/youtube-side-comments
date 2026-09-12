@@ -12,3 +12,11 @@ This is a defect found while implementing ticket 02, not new scope. YouTube rend
 - [ ] A video whose comments are genuinely turned off still Steps Aside, with that reason recorded.
 - [ ] The fix does not rest on a wall-clock threshold tuned to one machine's network speed.
 - [ ] No empty Comment Pane is left behind, and no notice of YouTube's is relocated into the Pane.
+
+## Comments
+
+**This ticket now blocks ticket 05's last acceptance criterion**, and that is how it was found to be real rather than theoretical.
+
+Ticket 05's background-tab test fails with the recorded reason `comments-disabled`. While a tab is hidden, YouTube has not populated the Comments; the region is empty; the settle window expires and concludes there are none. A background tab is simply the most dependable way to be slower than a 3-second timer — which is exactly the failure this ticket describes, reached through the scenario it was filed for.
+
+The fix therefore unblocks a user-visible criterion as well as removing a latent one: a Watch Page opened in a background tab should be arranged when the tab is shown.
