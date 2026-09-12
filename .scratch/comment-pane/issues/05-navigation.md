@@ -13,7 +13,7 @@
 - [x] Navigating repeatedly in both directions leaves no accumulated residue in the page.
 - [x] Re-applying the layout relies on an event that fires on both a cold load and an in-page navigation, so one code path covers both.
 - [x] Teardown is driven by an earlier signal than re-application, so the old arrangement is gone before the new one lands.
-- [ ] The layout is applied correctly when arriving at a Watch Page that was loaded in a background tab.
+- [x] The layout is applied correctly when arriving at a Watch Page that was loaded in a background tab.
 
 ## Comments
 
@@ -28,3 +28,5 @@ This ticket's last criterion is therefore **blocked on ticket 08**, not on more 
 The smoke suite is deliberately left red on that single test so the bug stays visible rather than being deleted or skipped.
 
 **Amended after independent verification.** Two criteria's tests — "navigating repeatedly in both directions" and "navigating to a non-watch page" — are intermittently red in this environment, and both for the same verified reason rather than two: the fixture hops through a channel that now serves only children's and live videos, so `hopFromChannel` exhausts its eight landings without finding one with comments. Every landing is recorded in the failure, and each reads "Comments are turned off. Learn more" with the extension correctly declining it. The criteria are therefore not falsified, but they are only verified when the fixture can find a suitable video. That dependency is a fixture problem and is recorded on ticket 10 — it is not a defect in the navigation work.
+
+**Background-tab criterion now earned.** Ticket 08 removed the settle window that was causing it, and the test passes — 16.3s in a focused run and 15.4–16.2s across three consecutive full runs. Its box is ticked above. The cause was never navigation: a hidden tab was simply the most dependable way to be slower than a timer that no longer exists.
