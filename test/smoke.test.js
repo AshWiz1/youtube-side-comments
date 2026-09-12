@@ -141,12 +141,23 @@ describe('Comment Pane on a real Watch Page', { skip: SKIP }, () => {
       );
     } catch (error) {
       // Never let this read as a product failure when the real cause is the
-      // environment. Report what the browser actually had.
+      // environment. Report what the browser actually had — including what the
+      // extension made of it, because "no Pane" and "a Pane with no Comments in
+      // it" are different faults and only one of them is ours.
       const seen = await page
-        .eval(`({ url: location.href, title: document.title, h1: document.body.innerText.slice(0, 200) })`)
+        .eval(`(() => { const c = document.querySelector('#comments');
+          const pane = document.getElementById('ysc-pane');
+          return { url: location.href, title: document.title, h1: document.body.innerText.slice(0, 200),
+            applied: document.documentElement.dataset.ysc || null,
+            reason: document.documentElement.dataset.yscReason || null,
+            pane: !!pane, paneThreads: pane ? pane.querySelectorAll('ytd-comment-thread-renderer').length : 0,
+            region: c ? (c.hasAttribute('disable-upgrade') ? 'placeholder' : 'built') + ' kids=' + c.childElementCount : 'missing',
+            header: !!c?.querySelector('ytd-comments-header-renderer'),
+            threads: document.querySelectorAll('ytd-comment-thread-renderer').length }; })()`)
         .catch(() => ({}));
       throw new Error(
         `${error.message}\n  url:   ${seen.url}\n  title: ${seen.title}\n  page:  ${JSON.stringify(seen.h1)}\n` +
+          `  ysc:   ${JSON.stringify({ applied: seen.applied, reason: seen.reason, pane: seen.pane, paneThreads: seen.paneThreads, region: seen.region, header: seen.header, threads: seen.threads })}\n` +
           `  extension id: ${browser.extensionId}\n  chrome: ${browser.stderr().slice(-400)}`,
       );
     }
@@ -1190,10 +1201,12 @@ describe('Comment Pane on a real Watch Page', { skip: SKIP }, () => {
       return pane.scrollTop > 0;
     })()`, 20_000);
 
-  /** The first truthy value `expression` takes within `ms`, or `false`. */
-  const poll = async (expression, ms) => {
+  /** The first truthy value `expression` takes within `ms`, or `false`. Asked of
+   *  `p`, which is the page in front unless the test is about another one: the
+   *  page being waited on is often not the page on screen. */
+  const poll = async (expression, ms, p = page) => {
     for (const deadline = Date.now() + ms; Date.now() < deadline; ) {
-      const value = await page.eval(expression).catch(() => false);
+      const value = await p.eval(expression).catch(() => false);
       if (value) return value;
       await sleep(300);
     }
@@ -1252,13 +1265,16 @@ describe('Comment Pane on a real Watch Page', { skip: SKIP }, () => {
    *  list that in this environment runs into children's videos whose comments
    *  YouTube has turned off. */
   const hopFromChannel = async () => {
-    let last = null;
+    const landings = [];
     for (let skip = 0; skip < 8; skip++) {
       const { arrived, unusable } = await clickAndWait(skip);
       if (arrived) return arrived;
-      last = unusable;
+      landings.push(unusable);
     }
-    throw new Error(`the channel offered nothing this test could use — the last landing was ${JSON.stringify(last)}`);
+    // Every landing, not only the last: a list of them is what tells a channel
+    // of commentless videos — this environment's own drift — from a page this
+    // extension failed to arrange.
+    throw new Error(`the channel offered nothing this test could use — ${JSON.stringify(landings)}`);
   };
 
   /** Away to the channel the video belongs to, by clicking the channel link
@@ -1413,8 +1429,13 @@ describe('Comment Pane on a real Watch Page', { skip: SKIP }, () => {
     // Pane never appears until a refresh. Opening a tab makes it the active
     // one, so the tab under test is created first and the page already loaded
     // is brought back in front of it, leaving the new one in the background.
-    // Read while the page is still on screen and arranged, so the comparison is
-    // with the width a reader had actually chosen.
+    //
+    // The page in front is put back on the known video first, because what this
+    // test reads from it — the width a reader had chosen — only exists on a page
+    // that is arranged: a page that Stepped Aside carries no Pane and no width
+    // of its own. That also keeps this test about the tab in the background
+    // rather than about whatever the test before it left on screen.
+    await startFromKnownVideo();
     const chosen = (await arrangement()).width;
     const hidden = await newPage(browser, null);
     try {
@@ -1435,10 +1456,15 @@ describe('Comment Pane on a real Watch Page', { skip: SKIP }, () => {
       })`);
 
       await hidden.send('Page.bringToFront');
+      // Waited out on the tab under test, which is the one that has to be
+      // arranged: YouTube loads the Comments only while their element is on
+      // screen, so a page that has just been shown is a page whose Comments are
+      // still on their way.
       const shown = await poll(
         `document.documentElement.dataset.ysc === 'on' &&
           !!document.querySelector('#ysc-pane ytd-comment-thread-renderer')`,
         90_000,
+        hidden,
       );
       assert.ok(
         shown,
@@ -1453,7 +1479,15 @@ describe('Comment Pane on a real Watch Page', { skip: SKIP }, () => {
       );
       const r = await arrangement(hidden);
       assertArranged(r, `a Watch Page opened in a background tab, hidden as ${JSON.stringify(background)}`);
-      assert.ok(r.threads > 0, 'the Comments did not load into the background tab’s Comment Pane');
+      assert.ok(
+        r.threads > 0,
+        `the Comments did not load into the background tab’s Comment Pane — ${JSON.stringify({
+          thread: r.firstThread, pane: r.pane, scrollTop: r.scrollTop, counts: r.counts,
+          region: await hidden.eval(`(() => { const c = document.querySelector('#comments');
+            return c ? (c.hasAttribute('disable-upgrade') ? 'placeholder' : 'built') + ' kids=' + c.childElementCount +
+              ' header=' + !!c.querySelector('ytd-comments-header-renderer') : 'missing'; })()`).catch(() => null),
+        })}`,
+      );
       assert.ok(
         chosen > 320 && r.width === chosen,
         `the background tab opened at ${r.width}px, not the ${chosen}px the preference was left at`,
@@ -1468,6 +1502,22 @@ describe('Comment Pane on a real Watch Page', { skip: SKIP }, () => {
       await page.send('Page.bringToFront');
       await startFromKnownVideo();
     }
+  });
+
+  test('a video whose comments are turned off Steps Aside, leaving YouTube’s notice alone', async () => {
+    // The other measured shape of a commentless Watch Page: the region upgrades
+    // and holds YouTube's own notice and no comment section at all — the section
+    // renderer with no header, no threads and nothing else in it. There is
+    // nothing there to relocate, and the notice is YouTube's, not ours.
+    await page.eval(`(() => {
+      const section = document.createElement('ytd-item-section-renderer');
+      section.id = 'sections';
+      section.append(document.createElement('ytd-message-renderer'));
+      document.querySelector('#comments').replaceChildren(section);
+      window.dispatchEvent(new CustomEvent('yt-navigate-finish'));
+      return true;
+    })()`);
+    await stepAside('comments-disabled');
   });
 
   test('a video YouTube delivers no comments for Steps Aside, leaving no empty Pane', async () => {

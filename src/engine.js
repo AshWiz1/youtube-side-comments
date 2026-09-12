@@ -35,6 +35,27 @@ export const REASON = {
   TOO_NARROW: 'too-narrow',
 };
 
+/**
+ * What YouTube has said about the Comments on the page in front of us.
+ *
+ * YouTube renders the Comments region on **every** Watch Page and builds its
+ * comment section into it only once its watch response has arrived, so the
+ * region's presence says nothing, and an empty region is the *young* state
+ * rather than an answer about the video. These are read from YouTube's own
+ * markers — the placeholder it leaves before it builds, and the section it
+ * builds afterwards — never from how long the region has been empty: a hidden
+ * tab is given minutes and still has no answer in it, and a slow connection is
+ * not a commentless video.
+ */
+export const COMMENTS_STATE = {
+  /** YouTube has not built it yet: nothing can be concluded from the region. */
+  PENDING: 'pending',
+  /** YouTube built it and there is nothing in it to relocate. */
+  NONE: 'none',
+  /** YouTube built its comment section: there are Comments to relocate. */
+  READY: 'ready',
+};
+
 /** Where each relocated region belongs. */
 export const PLACE = {
   PANE: 'pane',
@@ -82,7 +103,10 @@ export const MIN_TWO_COLUMN_VIEWPORT = MIN_PANE_WIDTH + MIN_PLAYER_WIDTH;
  * The order also decides what the retry in the bootstrap sees: only
  * `unrecognised-structure` means *early or changed*, so everything checked
  * before it has to be a genuine refusal in its own right — a fact about the
- * page, not a fact about how much of it has loaded yet.
+ * page, not a fact about how much of it has loaded yet. A page YouTube has not
+ * built its Comments on retries through that same reason, deliberately: there
+ * is nothing to conclude from it, and no clock that would make a conclusion
+ * honest.
  *
  * @param {object} state
  * @param {{width: number, container?: number}} state.viewport  `width` is the
@@ -114,7 +138,21 @@ export function decide({ viewport, page, prefs }) {
   // outranks the rest: in a column this narrow, nothing else about the page
   // changes the answer.
   if (page.isSingleColumn === true) return stepAside(REASON.SINGLE_COLUMN);
-  if (page.commentsDisabled) return stepAside(REASON.COMMENTS_DISABLED);
+  // YouTube has not built its comment section yet. Every Watch Page renders the
+  // Comments region and leaves it empty while the watch response is on its way,
+  // so an empty region is the page being young and not an answer about the
+  // video: nothing is concluded from it, and the page is asked again instead of
+  // being Stepped Aside from. This outranks our own viewport guard below,
+  // because a page YouTube has not built cannot yet say whether it is one
+  // column or two, and the guard is a fallback for a page that can.
+  if (page.commentsState === COMMENTS_STATE.PENDING) {
+    return stepAside(REASON.UNRECOGNISED_STRUCTURE);
+  }
+  // YouTube built its comment section and there is nothing in it to relocate:
+  // the video's comments are turned off. Relocating that region would leave an
+  // empty Comment Pane behind, and moving YouTube's own notice into the Pane is
+  // worse than leaving the whole page alone.
+  if (page.commentsState === COMMENTS_STATE.NONE) return stepAside(REASON.COMMENTS_DISABLED);
 
   // Our own viewport guard is a fallback for a page where YouTube's signal is
   // absent, so that a silent change to it degrades to no room rather than to a

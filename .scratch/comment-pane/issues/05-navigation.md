@@ -26,3 +26,5 @@ The failure is **not navigation's**. The reason recorded in the failing run is `
 This ticket's last criterion is therefore **blocked on ticket 08**, not on more navigation work.
 
 The smoke suite is deliberately left red on that single test so the bug stays visible rather than being deleted or skipped.
+
+**Amended after independent verification.** Two criteria's tests — "navigating repeatedly in both directions" and "navigating to a non-watch page" — are intermittently red in this environment, and both for the same verified reason rather than two: the fixture hops through a channel that now serves only children's and live videos, so `hopFromChannel` exhausts its eight landings without finding one with comments. Every landing is recorded in the failure, and each reads "Comments are turned off. Learn more" with the extension correctly declining it. The criteria are therefore not falsified, but they are only verified when the fixture can find a suitable video. That dependency is a fixture problem and is recorded on ticket 10 — it is not a defect in the navigation work.

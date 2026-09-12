@@ -8,16 +8,24 @@ import {
   ACTION,
   REASON,
   PLACE,
+  COMMENTS_STATE,
   DEFAULT_PANE_WIDTH,
   MIN_PANE_WIDTH,
   MIN_PLAYER_WIDTH,
   MIN_TWO_COLUMN_VIEWPORT,
 } from '../src/engine.js';
 
-/** An ordinary desktop Watch Page: two columns by YouTube's own signal. */
+/** An ordinary desktop Watch Page: two columns by YouTube's own signal, and its
+ *  comment section built and holding Comments. */
 const state = ({ viewport = {}, page = {}, prefs = {} } = {}) => ({
   viewport: { width: 1920, ...viewport },
-  page: { isWatchPage: true, structureRecognised: true, isSingleColumn: false, ...page },
+  page: {
+    isWatchPage: true,
+    structureRecognised: true,
+    isSingleColumn: false,
+    commentsState: COMMENTS_STATE.READY,
+    ...page,
+  },
   prefs: { enabled: true, paneWidth: null, ...prefs },
 });
 
@@ -31,7 +39,8 @@ const triggers = [
   ['a live chat', { page: { hasLiveChat: true } }, REASON.LIVE_CHAT],
   ['an open YouTube panel', { page: { hasOpenPanel: true } }, REASON.OPEN_PANEL],
   ['unknown structure', { page: { structureRecognised: false } }, REASON.UNRECOGNISED_STRUCTURE],
-  ['comments disabled', { page: { commentsDisabled: true } }, REASON.COMMENTS_DISABLED],
+  ["YouTube's Comments not built yet", { page: { commentsState: COMMENTS_STATE.PENDING } }, REASON.UNRECOGNISED_STRUCTURE],
+  ['no Comments to relocate', { page: { commentsState: COMMENTS_STATE.NONE } }, REASON.COMMENTS_DISABLED],
   ["YouTube's own single column", { page: { isSingleColumn: true } }, REASON.SINGLE_COLUMN],
   ["a viewport too narrow, YouTube's signal absent", { page: { isSingleColumn: null }, viewport: { width: 700 } }, REASON.TOO_NARROW],
   ['a viewport one pixel under the fallback', { page: { isSingleColumn: null }, viewport: { width: 799 } }, REASON.TOO_NARROW],
@@ -76,6 +85,12 @@ test('place identifiers are stable', () => {
   assert.deepEqual(PLACE, { PANE: 'pane', STRIP: 'strip', NATIVE: 'native' });
 });
 
+// The Adapter reads these from YouTube's own markers and the Engine compares
+// them, so a rename on either side would stop them meeting.
+test('comments state identifiers are stable', () => {
+  assert.deepEqual(COMMENTS_STATE, { PENDING: 'pending', NONE: 'none', READY: 'ready' });
+});
+
 // The spec's rule for overlaps: the reason reported is the first trigger that
 // matches, and the order is the engine's to choose — so pin it down.
 const firsts = [
@@ -84,8 +99,12 @@ const firsts = [
   ['fullscreen outranks theater', { page: { isFullscreen: true, isTheater: true } }, REASON.FULLSCREEN],
   ['a live chat outranks an open panel', { page: { hasLiveChat: true, hasOpenPanel: true } }, REASON.LIVE_CHAT],
   ['a mode outranks the structure', { page: { isTheater: true, structureRecognised: false } }, REASON.THEATER],
-  ['structure outranks no comments', { page: { structureRecognised: false, commentsDisabled: true } }, REASON.UNRECOGNISED_STRUCTURE],
-  ['no room outranks no comments', { page: { commentsDisabled: true, isSingleColumn: true } }, REASON.SINGLE_COLUMN],
+  ['structure outranks no comments', { page: { structureRecognised: false, commentsState: COMMENTS_STATE.NONE } }, REASON.UNRECOGNISED_STRUCTURE],
+  ['no room outranks no comments', { page: { commentsState: COMMENTS_STATE.NONE, isSingleColumn: true } }, REASON.SINGLE_COLUMN],
+  // A page YouTube has not built is asked again rather than judged by our own
+  // guard: it cannot say which column state it is in yet, and the guard is a
+  // fallback for a page that can.
+  ['a young page outranks our viewport guard', { page: { commentsState: COMMENTS_STATE.PENDING, isSingleColumn: null }, viewport: { width: 700 } }, REASON.UNRECOGNISED_STRUCTURE],
   ["YouTube's column outranks our viewport", { page: { isSingleColumn: true }, viewport: { width: 400 } }, REASON.SINGLE_COLUMN],
 ];
 for (const [name, s, reason] of firsts) {

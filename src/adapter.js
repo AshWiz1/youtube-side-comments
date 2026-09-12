@@ -39,30 +39,31 @@ const TWO_COLUMNS = 'is-two-columns_';
 const SINGLE_COLUMN = 'is-single-column';
 
 /**
- * YouTube's own record of whether the watch response it rendered carried a
- * comment section, set on the watch root. YouTube renders the Comments region
- * on every Watch Page — so the region's presence cannot tell us whether there
- * is anything to put in it — but this flag does: a video with comments turned
- * off arrives without it, and relocating the region then leaves an empty
- * Comment Pane. Measured against YouTube's own watch responses for 420 videos:
- * the flag tracks the response's comment section exactly, including the live
- * streams where the region renders empty because chat has replaced it.
+ * YouTube's own marker, on the Comments region itself, that it has **not**
+ * built its comment section there yet: the region is stamped as a hidden,
+ * empty lazy-upgrade placeholder, and the stamp comes off in the same instant
+ * YouTube fills the region — with its comment section, or with its own notice
+ * that the video's comments are turned off. So the stamp, and not the empty
+ * region, is what "the page is young" means: while it is on, the region is
+ * evidence of nothing at all.
  */
-const RESPONSE_HAS_COMMENTS = 'response-has-comments';
+const DISABLE_UPGRADE = 'disable-upgrade';
 
 /**
- * How long a commentless Comments region is allowed to stay that way before it
- * counts as YouTube's answer rather than as a page still being built.
- *
- * Measured on a Watch Page whose comments do exist: the region appears empty at
- * 2.5s and YouTube fills it — and sets `response-has-comments` — at 3.6s, the
- * two arriving together with the watch response. Before that, a video with
- * comments and a video with none are *identical* in the page, so an empty
- * region is evidence of nothing and acting on it would leave the extension
- * permanently stepped aside on ordinary videos. This window is observation
- * latency, not a product threshold: the largest measured delay is 1.1s.
+ * The renderers YouTube builds for the Comments themselves: the header that
+ * carries the count, the sort menu and the composer, and the threads below it.
+ * A built region holding neither is YouTube's answer that there is nothing to
+ * relocate — which is how a video whose comments are turned off arrives, with
+ * the notice in the region and no comment section anywhere in it. Moving that
+ * region would leave an empty Comment Pane holding a notice that belongs to
+ * the page.
  */
-const COMMENTS_SETTLE_MS = 3000;
+const COMMENTS_SECTION = 'ytd-comments-header-renderer, ytd-comment-thread-renderer';
+
+/** What YouTube has said about the Comments. These are the Layout Engine's
+ *  `COMMENTS_STATE` identifiers, named here as `ACTION_APPLY` is named from
+ *  `ACTION`: the Adapter produces them and the Engine compares them. */
+const COMMENTS_STATE = { PENDING: 'pending', NONE: 'none', READY: 'ready' };
 
 /**
  * Panel modes that dock **horizontally**, at the rail's own width, and so
@@ -106,8 +107,12 @@ export function createAdapter(doc, { splitter } = {}) {
    *  is YouTube's, and anything other than the exact position is a change we
    *  made to a page we then claimed to have left alone. */
   let relatedHome = null;
-  /** When the Comments region was first seen with nothing in it. */
-  let blankSince = 0;
+  /** The Comments region the observer is on, and the element holding it, so that
+   *  the observer is re-pointed at a new one rather than duplicated or left
+   *  behind. */
+  let watchedComments = null;
+  let watchedContainer = null;
+  let commentsWatch = null;
   /** The width currently on the Pane, so the Splitter can start a gesture from
    *  what is actually on screen rather than from what it last asked for. */
   let appliedWidth = 0;
@@ -172,20 +177,69 @@ export function createAdapter(doc, { splitter } = {}) {
   }
 
   /**
-   * Whether YouTube has finished saying what belongs in the Comments region:
-   * either it has put something there, or it has left the region empty long
-   * enough that a response carrying comments would have arrived. Until then the
-   * page is young, and the honest answer is that we do not know yet.
+   * Call back the moment YouTube answers for the Comments, whenever that is.
+   *
+   * This is watched rather than timed, for the reason the mode observer is:
+   * YouTube writing the answer *is* the moment the decision can move, and no
+   * clock can tell a page that has not been given the chance to answer from one
+   * whose answer is "no comments". Measured: on a Watch Page in a background
+   * tab, YouTube took 9.4s to build the comment section — three times what the
+   * same page took in front of a reader, and longer than any window we would
+   * have chosen. The region is observed rather than the watch root because the
+   * answer is written on the region: the placeholder stamp coming off, and the
+   * section — or YouTube's notice — arriving inside it.
+   *
+   * The observer follows the region for the same reason the mode observer
+   * follows the root: YouTube replaces both between videos, and an observer
+   * left on a detached element hears nothing. It is pointed at the region's
+   * container as well, because YouTube replaces the region itself rather than
+   * filling the one it left — which is only visible on the element that holds
+   * it, and which would otherwise leave the extension on a decision about a
+   * region that is gone.
    */
-  function commentsSettled(root) {
+  function observeComments(onChange) {
     const comments = doc.querySelector(COMMENTS);
+    const container = comments?.parentElement ?? null;
+    if (comments === watchedComments && container === watchedContainer) return Boolean(comments);
+    commentsWatch?.disconnect();
+    watchedComments = comments;
+    watchedContainer = container;
+    commentsWatch = null;
     if (!comments) return false;
-    if (comments.firstElementChild || has(root, RESPONSE_HAS_COMMENTS)) {
-      blankSince = 0;
-      return true;
-    }
-    blankSince ||= Date.now();
-    return Date.now() - blankSince >= COMMENTS_SETTLE_MS;
+    commentsWatch = new MutationObserver(onChange);
+    // One observer on both: the region's own markers, and the container's
+    // children. The attribute filter names a marker only the region carries, so
+    // watching the container for attributes costs nothing and can fire nothing.
+    const watch = { attributes: true, attributeFilter: [DISABLE_UPGRADE], childList: true };
+    commentsWatch.observe(comments, watch);
+    if (container) commentsWatch.observe(container, watch);
+    return true;
+  }
+
+  /**
+   * What YouTube has said about the Comments, read from the region itself.
+   *
+   * Every Watch Page renders the Comments region, and YouTube builds its
+   * comment section into it only once the watch response has arrived — until
+   * then the region carries YouTube's own placeholder, empty and hidden and
+   * evidence of nothing. Measured on a Watch Page whose comments exist: the
+   * region is a placeholder at 2.4s, upgraded — holding its header and the
+   * threads' continuation — at 3.2s. A tab in the background builds the same
+   * way and can be hidden for minutes, which is why a clock is the wrong
+   * instrument for this question and not merely a badly tuned one: the state is
+   * read from the page, so no window has to be tuned to anyone's connection,
+   * and a hidden page is young for as long as it is hidden rather than until
+   * some timer expires.
+   */
+  function commentsState(comments) {
+    // A page nobody is looking at has not been given its chance to show its
+    // Comments, whatever the region says: a hidden tab is not rendered, and no
+    // conclusion about the video can be drawn from a page in that state. The
+    // decision is re-taken when the tab is shown, which is the first moment it
+    // can be judged — see the bootstrap's `resume`.
+    if (doc.hidden) return COMMENTS_STATE.PENDING;
+    if (!comments || comments.hasAttribute(DISABLE_UPGRADE)) return COMMENTS_STATE.PENDING;
+    return comments.querySelector(COMMENTS_SECTION) ? COMMENTS_STATE.READY : COMMENTS_STATE.NONE;
   }
 
   /**
@@ -210,6 +264,10 @@ export function createAdapter(doc, { splitter } = {}) {
       page: {
         isWatchPage: doc.location.pathname === '/watch',
         isShorts: doc.location.pathname.startsWith('/shorts'),
+        // Whether YouTube has built the Comments yet, and what it built there:
+        // an empty region with no answer behind it is a young page, not a video
+        // whose comments are turned off.
+        commentsState: commentsState(comments),
         // Theater mode is persisted across loads, so it is read from the page
         // itself rather than from a toggle anyone has to have just performed.
         isTheater: has(root, THEATER),
@@ -219,21 +277,17 @@ export function createAdapter(doc, { splitter } = {}) {
         hasOpenPanel:
           Boolean(doc.querySelector(OPEN_PANEL)) ||
           DOCKING_PANEL_MODES.some((mode) => has(root, mode)),
-        // Nothing for the Comment Pane to show: YouTube rendered a Comments
-        // region and put nothing in it, and its watch response carried no
-        // comment section. Relocating that region would leave an empty Pane.
-        commentsDisabled:
-          Boolean(comments) && !comments.firstElementChild && !has(root, RESPONSE_HAS_COMMENTS),
         // Tri-state: true collapsed, false two columns, null when YouTube's
         // markers are absent — which is the only case where our own viewport
         // guard is allowed to speak.
         isSingleColumn: has(root, SINGLE_COLUMN) ? true : has(root, TWO_COLUMNS) ? false : null,
         // Only claim to understand the page if every element we reparent into
-        // or out of is actually present, and if YouTube has finished saying
-        // what belongs in its Comments region — a page that has not yet built
-        // or answered for one is *young*, not unrecognised, and the bootstrap
-        // retries this one reason rather than Stepping Aside on it.
-        structureRecognised: Boolean(page && commentsSettled(root)),
+        // or out of is actually present. Whether the Comments region is there
+        // to be relocated is a separate question, asked by `commentsState`
+        // above: a page that has not built one yet is *young*, not
+        // unrecognised, and the bootstrap retries that one reason rather than
+        // Stepping Aside on it.
+        structureRecognised: Boolean(page),
       },
       prefs,
     };
@@ -271,9 +325,16 @@ export function createAdapter(doc, { splitter } = {}) {
 
     const pane = paneIn(page.rail);
     // The Splitter straddles the boundary between the Player and the Pane, so it
-    // goes immediately before the Pane it resizes.
-    if (splitter) page.rail.insertBefore(splitter, pane);
-    pane.append(comments);
+    // goes immediately before the Pane it resizes — and only when it is not
+    // already there, because `insertBefore` is a move.
+    if (splitter && splitter.nextElementSibling !== pane) page.rail.insertBefore(splitter, pane);
+    // Appending the Comments is a *move* — a remove and an insert — even when
+    // they are already the Pane's child. YouTube loads the Comments only while
+    // their element is on screen, and a page arranged while its tab was hidden
+    // is re-arranged the moment the tab is shown, exactly as that load begins,
+    // so a move that changes nothing is a risk taken for nothing. A region
+    // already in the Pane is therefore left exactly where it is.
+    if (!pane.contains(comments)) pane.append(comments);
 
     // The Recommendation Strip moves as one element, contents and all, so the
     // related list keeps its own items, its own scroll and its own lazy-loading
@@ -349,7 +410,8 @@ export function createAdapter(doc, { splitter } = {}) {
    * Undo an arrangement completely. Everything the extension put into the page
    * is removed and everything it moved goes back to the node it came from, so
    * that a page we stepped aside from is indistinguishable from one we never
-   * touched.
+   * touched. Leaving a page is the same act, and is served by this same path:
+   * nothing about the page is remembered once its arrangement is gone.
    */
   function revert() {
     const comments = doc.querySelector(COMMENTS);
@@ -387,20 +449,6 @@ export function createAdapter(doc, { splitter } = {}) {
   }
 
   /**
-   * Leave the page we are on. Everything we put in it comes out, and so does the
-   * judgement we had formed about its Comments: how long one page's Comments
-   * region has been empty is a fact about that page, and dating the next page's
-   * empty region from the last one's reads a young page as a video whose comments
-   * are turned off. It is deliberately not part of `revert()`: Stepping Aside
-   * from a page leaves us on it, and an empty Comments region there is exactly
-   * the case whose clock has to keep running until YouTube answers for it.
-   */
-  function teardown() {
-    blankSince = 0;
-    revert();
-  }
-
-  /**
    * YouTube writes the Player's internal sizes on window resize and attaches no
    * observer to the Player, so without this the video element and the control
    * bar overflow their own frame by hundreds of pixels once the column changes
@@ -419,8 +467,8 @@ export function createAdapter(doc, { splitter } = {}) {
     readState,
     apply,
     revert,
-    teardown,
     observeModes,
+    observeComments,
     setPaneWidth,
     /** The width the Pane is actually at, which is what a gesture starts from. */
     paneWidth: () => appliedWidth,

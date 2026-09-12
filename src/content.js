@@ -67,6 +67,12 @@
     // asking — and keep following it, because YouTube replaces its watch roots
     // between videos and an observer left behind hears nothing.
     adapter.observeModes(() => run());
+    // And keep following the Comments region for the same reason, on top of
+    // asking: YouTube builds its comment section into the region in its own
+    // time — later in a background tab than in front of a reader — and that
+    // build is the answer this decision waits for. An observer hears it whenever
+    // it lands; the asking above only lasts as long as its window does.
+    adapter.observeComments(() => run());
     // YouTube builds a Watch Page asynchronously, so a run that lands before
     // the Comments exist is *early*, not unrecognised. Retrying that one reason
     // keeps a slow load from Stepping Aside on a page that was merely young.
@@ -132,7 +138,7 @@
   const teardown = () => {
     last = null;
     life++;
-    adapter.teardown();
+    adapter.revert();
   };
 
   // Read before the first decision, so the Pane is never briefly arranged at a
