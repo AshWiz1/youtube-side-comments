@@ -30,8 +30,11 @@ const out = join('dist', `${FOLDER}-${version}.zip`);
 
 const dirty = execFileSync('git', ['status', '--porcelain'], { cwd: ROOT }).toString().trim();
 if (dirty) {
-  console.warn('! The working tree has uncommitted changes. They will NOT be in the zip —');
-  console.warn('  it is built from the last commit. Commit first if that is not what you want.\n');
+  console.warn('! The working tree has uncommitted changes, and this zip is built from the');
+  console.warn('  last COMMIT — so it will not contain them.');
+  console.warn('  The trap: package now, then commit the zip alongside those changes, and the');
+  console.warn('  zip ships the old content while looking freshly built. Commit the changes');
+  console.warn('  first, then package, then commit the zip.\n');
 }
 
 mkdirSync(join(ROOT, 'dist'), { recursive: true });
