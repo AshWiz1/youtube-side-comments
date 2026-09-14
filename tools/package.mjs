@@ -48,6 +48,7 @@ execFileSync(
     'manifest.json',
     'src',
     'README.md',
+    'LICENSE',
   ],
   { cwd: ROOT, stdio: 'inherit' },
 );

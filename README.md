@@ -120,3 +120,11 @@ The tests come in two layers, matching how the code is built:
 `tools/screenshots.mjs` regenerates the images in this README from a live browser, and `npm run package` builds the zip that goes on a release.
 
 The design record — the spec and the tickets, including the bugs found along the way and the reasoning behind each decision — is in `.scratch/comment-pane/`. Start with `spec.md`.
+
+---
+
+## License
+
+[MIT](LICENSE) — use it, change it, ship it, sell it. No warranty.
+
+This extension moves YouTube's own elements around rather than reimplementing them, an approach borrowed from earlier projects in the same space; see the prior-art notes in `.scratch/comment-pane/spec.md`. Not affiliated with YouTube or Google.
