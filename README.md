@@ -24,10 +24,6 @@ YouTube puts the comments below the video, so you scroll down to read them and t
 
 ![The status panel, with the off switch](docs/screenshots/04-status-and-off-switch.png)
 
-**And it gets out of the way.** On pages where this layout doesn't fit, it leaves YouTube completely alone rather than half-applying something.
-
-![YouTube's own layout, untouched](docs/screenshots/05-native-layout.png)
-
 ---
 
 ## Install
@@ -91,17 +87,6 @@ To find out which one applies, click the toolbar icon. It names the reason.
 
 ---
 
-## Requirements and limits
-
-- **Chrome / Chromium only.** WebExtensions for Firefox would need work.
-- **Desktop `youtube.com` only.** Not the mobile site, not embeds, not YouTube Music.
-- **Needs a reasonably wide window.** Below roughly 1000px, YouTube itself switches to one column and there's no room for a side pane, so the extension steps aside and lets YouTube do its thing.
-- **It may break when YouTube changes its page.** This kind of extension always does, because YouTube's markup is not an API. When something stops working, the toolbar icon is the first place to look.
-
-Nothing is sent anywhere. No analytics, no network requests, no accounts. The only thing stored is your pane width and whether the layout is on, both kept locally by your browser.
-
----
-
 ## Development
 
 Plain JavaScript, no build step, no bundler, no dependencies. The source in `src/` is what runs.
@@ -123,11 +108,3 @@ The tests come in two layers, matching how the code is built:
 Run `npm run package` **after** committing changes to `src/` or `manifest.json`, then commit the rebuilt zip. The zip is built from the last commit, so packaging before you commit produces one that ships the old content while looking freshly built.
 
 The design record is in `.scratch/comment-pane/`: the spec and the tickets, including the bugs found along the way and the reasoning behind each decision. Start with `spec.md`.
-
----
-
-## License
-
-[MIT](LICENSE). Use it, change it, ship it, sell it. No warranty.
-
-This extension moves YouTube's own elements around rather than reimplementing them, an approach borrowed from earlier projects in the same space; see the prior-art notes in `.scratch/comment-pane/spec.md`. Not affiliated with YouTube or Google.
