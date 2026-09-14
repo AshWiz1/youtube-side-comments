@@ -38,7 +38,7 @@ Chrome, or any Chromium browser (Edge, Brave, Arc). Not tested on Firefox.
 
 ### The quick way
 
-**1.** Download `youtube-side-comments-<version>.zip` from the [Releases page](../../releases/latest) — about 40 KB.
+**1.** Download the zip from [`dist/`](dist) — about 40 KB, named with the version it was built from. (Tagged builds are also attached to [Releases](../../releases), when there are any.)
 
 **2.** Unzip it somewhere it can stay. You get a folder called `youtube-side-comments`. Don't move or delete it afterwards: Chrome loads the extension *from that folder*, so if it goes, the extension does too.
 
