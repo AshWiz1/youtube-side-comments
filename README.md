@@ -32,16 +32,33 @@ YouTube puts the comments below the video, so you scroll down to read them and t
 
 ## Install
 
-Chrome, or any Chromium browser (Edge, Brave, Arc). Not tested on Firefox. This is not on the Chrome Web Store — you load it from the folder.
+Chrome, or any Chromium browser (Edge, Brave, Arc). Not tested on Firefox.
 
-1. Download or clone this repo. Note where the folder is.
-2. Open `chrome://extensions` in your browser.
-3. Turn on **Developer mode** — the toggle in the top right.
-4. Click **Load unpacked**.
-5. Select **the folder containing `manifest.json`** — the repo folder itself, not any file inside it.
-6. Open any YouTube video.
+> **Why Developer mode?** Chrome only allows one-click installs from the Chrome Web Store, and this isn't published there. Outside the store, Chrome deliberately makes you load the folder yourself — and it blocks the signed "packed" `.crx` files that used to be an alternative. There is no way around this step short of publishing.
 
-When you first install it, Chrome hides new extensions. Click the **puzzle-piece icon** next to the address bar, find *YouTube Side Comments*, and click the **pin** to keep it visible.
+### The quick way
+
+**1.** Download `youtube-side-comments-<version>.zip` from the [Releases page](../../releases/latest) — about 40 KB.
+
+**2.** Unzip it somewhere it can stay. You get a folder called `youtube-side-comments`. Don't move or delete it afterwards: Chrome loads the extension *from that folder*, so if it goes, the extension does too.
+
+**3.** Open `chrome://extensions` in your browser.
+
+**4.** Turn on **Developer mode** — the toggle in the top right.
+
+**5.** Click **Load unpacked** and select the **`youtube-side-comments` folder** — the one containing `manifest.json`, not any file inside it.
+
+**6.** Open any YouTube video.
+
+### From source
+
+Same steps, except you `git clone` this repo and select the repo folder in step 5. You'll need [Node](https://nodejs.org) only if you want to run the tests.
+
+### After installing
+
+Chrome hides new extensions by default. Click the **puzzle-piece icon** next to the address bar, find *YouTube Side Comments*, and click the **pin** to keep it visible — that icon is where you find out why the extension stood down on a page where there's no comments pane.
+
+**Updates are manual.** Chrome won't auto-update an extension loaded this way: download the new zip, replace the folder's contents, and hit the reload arrow on the extension's card.
 
 ---
 
@@ -100,6 +117,6 @@ The tests come in two layers, matching how the code is built:
 - **`test/engine.test.js`** exercises the Layout Engine — a pure function that takes a description of the page and returns a decision. Every rule about where things go and when to back off lives here, and is enumerable in tests rather than only observable in a browser.
 - **The browser tests** (`test/smoke.test.js`, `test/entry-navigation.test.js`) drive the real extension in real Chrome against real YouTube, since that is the only way to catch YouTube moving something. They need a network and take a few minutes.
 
-`tools/screenshots.mjs` regenerates the images in this README from a live browser.
+`tools/screenshots.mjs` regenerates the images in this README from a live browser, and `npm run package` builds the zip that goes on a release.
 
 The design record — the spec and the tickets, including the bugs found along the way and the reasoning behind each decision — is in `.scratch/comment-pane/`. Start with `spec.md`.

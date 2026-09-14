@@ -5,6 +5,7 @@
   "description": "Shows a YouTube video's comments in a resizable pane beside the player.",
   "type": "module",
   "scripts": {
-    "test": "node --test --test-concurrency=1"
+    "test": "node --test --test-concurrency=1",
+    "package": "node tools/package.mjs"
   }
 }
